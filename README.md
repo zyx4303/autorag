@@ -96,6 +96,13 @@ python scripts/run_eval.py --limit 5
 > 但**公开提供检索属于信息网络传播行为**，需自行确认授权范围。
 > 发布前请先跑 `python scripts/publish_check.py`，详见 [portfolio.md](portfolio.md)。
 
+> **许可协议**
+> 代码采用 [MIT License](LICENSE)，可自由使用、修改、分发。
+> `data/documents/` 下的示例文档同样可自由使用，授权情况区分如下：
+> 虚构示例文档与自编码表对照表由作者构造（按 MIT）；
+> 法规全文来自政府公开渠道，依《著作权法》第五条不受著作权保护。
+> 详见 [LICENSE](LICENSE) 末尾的中文说明。
+
 ---
 
 ## 1. 这个项目有什么（面试可讲的技术点）
@@ -169,6 +176,7 @@ AutoRAG/
 ├── requirements-local.txt       # 可选：本地向量模型
 ├── Dockerfile
 ├── docker-compose.yml
+├── LICENSE                      # MIT（含示例文档授权说明）
 └── README.md
 ```
 

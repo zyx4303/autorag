@@ -98,10 +98,9 @@ python scripts/run_eval.py --limit 5
 
 > **许可协议**
 > 代码采用 [MIT License](LICENSE)，可自由使用、修改、分发。
-> `data/documents/` 下的示例文档同样可自由使用，授权情况区分如下：
+> `data/documents/` 下的示例文档授权情况单独说明在 [NOTICE](NOTICE)：
 > 虚构示例文档与自编码表对照表由作者构造（按 MIT）；
 > 法规全文来自政府公开渠道，依《著作权法》第五条不受著作权保护。
-> 详见 [LICENSE](LICENSE) 末尾的中文说明。
 
 ---
 
@@ -176,7 +175,8 @@ AutoRAG/
 ├── requirements-local.txt       # 可选：本地向量模型
 ├── Dockerfile
 ├── docker-compose.yml
-├── LICENSE                      # MIT（含示例文档授权说明）
+├── LICENSE                      # MIT
+├── NOTICE                       # 示例文档的来源与授权说明
 └── README.md
 ```
 

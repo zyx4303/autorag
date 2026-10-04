@@ -66,7 +66,7 @@ python scripts/ingest.py --rebuild
 
 到这里**检索链路**（加载 → 切分 → 向量化 → 入库 → 混合检索）就验证完了，零 token 消耗。
 要让它在检索结果基础上**生成答案**，只需在 `.env` 填 `LLM_API_KEY`（任何 OpenAI 兼容服务），
-再按第 3.3 节切换向量模型即可。
+再按第 [3.3 节](#33-第二步填-key切换成真正的语义检索) 切换向量模型即可。
 
 ```bash
 # 只测召回、不花 token
@@ -174,7 +174,10 @@ AutoRAG/
 
 ---
 
-## 3. 快速开始
+## 3. 完整安装与配置步骤
+
+> 如果你已经按开头「快速开始」跑通了检索链路，可以直接跳到 [3.3 节](#33-第二步填-key切换成真正的语义检索)
+> 配置对话模型；本节其余内容是给第一次接触本项目的人准备的完整说明。
 
 ### 3.1 环境要求
 
@@ -182,30 +185,28 @@ AutoRAG/
 - 可访问外网（下载依赖、调用 LLM API）
 - 不需要本地 GPU
 
-### 3.2 第一步：跑通链路（不填任何 Key）
+### 3.2 第一步：跑通检索链路（不填任何 Key）
+
+开头的「快速开始」三步已经覆盖了安装、自检与入库。这里补充**验证清单**——
+做完这三步，链路（加载 → 切分 → 向量化 → 入库 → 混合检索）就算验证完成：
+
+| 验证项 | 命令 | 期望结果 |
+| --- | --- | --- |
+| 环境与配置 | `python scripts/preflight.py` | 阻塞项 0、问题项 0 |
+| 纯逻辑正确性 | `python tests/smoke_test.py` | 通过 30 项、失败 0 项 |
+| 入库 | `python scripts/ingest.py --rebuild` | `indexed=6`、`total_chunks_in_store=87` |
+| 召回（零 token） | 见下方 curl | 返回结果里同时带 `vector_score` 与 `keyword_score` |
+| 批量召回评测（零 token） | `python scripts/run_eval.py --mode retrieve` | 跑通并生成 JSON + Markdown 报告 |
 
 ```bash
-cd AutoRAG
-
-# 1) 建虚拟环境
-python -m venv .venv
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
-# Linux / macOS
-source .venv/bin/activate
-
-# 2) 装依赖
-pip install -r requirements.txt
-
-# 3) 准备配置（默认 EMBEDDING_PROVIDER=hash，不需要 Key）
-copy .env.example .env      # Windows
-cp .env.example .env        # Linux / macOS
-
-# 4) 启动
-uvicorn app.main:app --reload --port 8000
+# 只看向量召回与 BM25 融合结果，不调用大模型、不消耗 token
+curl -X POST http://127.0.0.1:8000/api/v1/retrieve ^
+  -H "Content-Type: application/json" ^
+  -d "{\"query\":\"虚构车型A多久换一次机油\"}"
 ```
 
-打开 <http://127.0.0.1:8000/> 使用内置控制台，或打开 <http://127.0.0.1:8000/docs> 看接口文档。
+此时 `/api/v1/health` 会显示 `llm_ready=false`（因为 `LLM_API_KEY` 还是 `[待补充]`），
+这是**预期行为**：健康检查会如实报告未配置，而不是假装正常。
 
 > **Python 版本注意事项（实测踩过的坑）**
 > `chromadb` 0.5.x 依赖 `chroma-hnswlib`，而它**只发布了到 cp311 的 Windows wheel**，
@@ -215,32 +216,7 @@ uvicorn app.main:app --reload --port 8000
 > Python 3.9+ 直接可装），并已在 Python 3.13.9 上实测通过。
 > 如果你必须用 0.5.x，请改用 **Python 3.11** 解释器。
 
-此时 `/api/v1/health` 会显示 `llm_ready=false`（因为 `LLM_API_KEY` 还是 `[待补充]`），
-这是**预期行为**：健康检查会如实报告未配置，而不是假装正常。
-
-**不填 Key 也能先验证整条链路的办法**（建议按顺序做一遍）：
-
-```bash
-# 0) 环境自检：依赖版本、.env、模块导入、embedding 维度、Chroma 一致性
-python scripts/preflight.py
-
-# 1) 冒烟测试：纯逻辑，不联网
-python tests/smoke_test.py
-
-# 2) 入库自带的占位示例文档
-python scripts/ingest.py
-
-# 3) 只看向量召回与 BM25 融合结果，不调用大模型、不消耗 token
-curl -X POST http://127.0.0.1:8000/api/v1/retrieve ^
-  -H "Content-Type: application/json" ^
-  -d "{\"query\":\"首保周期\"}"
-
-# 4) 只测召回的批量评测（同样零 token 消耗）
-python scripts/run_eval.py --mode retrieve
-```
-
-到这里链路（加载 → 切分 → 向量化 → 入库 → 混合检索）就验证完了。
-只有"生成答案 + 引用"这一段需要 LLM Key，填完再做 3.3 节。
+只有"生成答案 + 引用"这一段需要 LLM Key，见下一节。
 
 ### 3.3 第二步：填 Key，切换成真正的语义检索
 
@@ -614,7 +590,9 @@ python scripts/preflight.py --ping-llm # 额外真实探测一次 LLM，约 1 to
 
 ---
 
-## 10. 设计与安全说明（以及已知局限）### 做得比较克制的地方
+## 10. 设计与安全说明（以及已知局限）
+
+### 做得比较克制的地方
 
 - **不编造数据**：仓库内所有数值均为 `[待补充]` 占位，示例文档也明确标注不是真实数据；
 - **不隐藏降级**：`hash` 模式、LLM 未配置、引用越界都会通过 `/health`、响应 `warnings` 明确暴露；

@@ -1,0 +1,44 @@
+# =============================================================================
+# 本地一键起服务： docker compose up --build
+# 说明：
+# - 所有密钥都从 .env 读取（不要把 Key 写进本文件，也不要提交 .env）；
+# - data/ 挂载到宿主机，向量库与文档不会随容器销毁而丢失；
+# - 默认只跑 API 单服务。若你想加前端/反向代理，在下面继续追加 service 即可。
+# =============================================================================
+services:
+  autorag-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: autorag:0.1.0
+    container_name: autorag-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 容器内路径统一收敛到 /app/data，宿主机目录由 volumes 决定
+      DOCUMENTS_DIR: /app/data/documents
+      CHROMA_DIR: /app/data/chroma
+      UPLOAD_DIR: /app/data/uploads
+      REGISTRY_PATH: /app/data/registry.json
+      BM25_INDEX_PATH: /app/data/bm25_index.json
+      API_HOST: 0.0.0.0
+      API_PORT: "8000"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./eval:/app/eval
+      # 可选：把本地模型缓存挂进来，避免每次重建镜像都重新下载（provider=local 时有用）
+      # - ./.cache/huggingface:/home/appuser/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # 单进程 + 内存态 BM25 索引：如要横向扩容，请先用脚本把 BM25 索引改成外部检索服务
+    deploy:
+      resources:
+        limits:
+          memory: 2g

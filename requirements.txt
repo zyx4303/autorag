@@ -1,0 +1,26 @@
+# =============================================================================
+# 核心依赖（必需）—— 版本区间为兼容范围，非精确锁定值
+# 安装： pip install -r requirements.txt
+# =============================================================================
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+python-multipart>=0.0.9
+# Chroma 版本说明（重要）：
+#   0.5.x 依赖 chroma-hnswlib，而它只提供到 cp311 的 Windows wheel，
+#   在 Python 3.12/3.13 上会退化成源码编译并报
+#   "Microsoft Visual C++ 14.0 or greater is required"。
+#   1.x 提供 cp39-abi3 的预编译 wheel，Python 3.9+ 都能直接装上，故这里用 1.x。
+#   若你坚持用 0.5.x，请改用 Python 3.11 解释器。
+chromadb>=1.0,<2.0
+httpx>=0.27,<1.0
+pydantic>=2.7,<3.0
+pydantic-settings>=2.3,<3.0
+python-dotenv>=1.0,<2.0
+
+# =============================================================================
+# 以下为可选能力，需要时手动安装（见 README「可选依赖」章节）：
+#
+# PDF 解析:            pip install pypdf>=4.2
+# DOCX 解析:           pip install python-docx>=1.1
+# 本地 embedding 模型: pip install -r requirements-local.txt
+# =============================================================================

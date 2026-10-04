@@ -1,0 +1,52 @@
+# =============================================================================
+# AutoRAG .gitignore
+# 原则：源码与文档模板提交；密钥、运行时产物、求职材料一律不提交。
+# =============================================================================
+
+# ---- 环境与密钥（务必不要提交）----
+.env
+.env.*
+!.env.example
+!.env.api.example
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+
+# ---- 运行时产物（向量库 / 索引 / 上传件 / 报告）----
+# 注意：这些必须与 data/documents 分开写。
+# 早期版本写了 `data/*` 想排除向量库，结果把 data/documents 下的示例文档也一起排除了，
+# 别人 clone 下来会看到一个空知识库 —— 所以这里逐项排除，不用通配整个 data 目录。
+data/chroma/
+data/uploads/
+data/_quarantine/
+data/registry.json
+data/bm25_index.json
+data/preflight_report.txt
+eval/results/
+
+# 允许保留目录占位与示例知识库
+!data/.gitkeep
+!data/documents/.gitkeep
+
+# ---- 模型缓存 ----
+.cache/
+models/
+
+# ---- 求职材料（含面试答案与求职策略，不要公开）----
+resume/
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log

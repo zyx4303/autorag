@@ -1,0 +1,27 @@
+# 构建镜像时排除的内容（配合 Dockerfile 使用）
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+!.env.api.example
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+data/chroma/
+data/uploads/
+data/registry.json
+data/bm25_index.json
+eval/results/
+
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log

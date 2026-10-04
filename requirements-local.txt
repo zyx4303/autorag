@@ -1,0 +1,7 @@
+# =============================================================================
+# 可选依赖：本地向量模型（EMBEDDING_PROVIDER=local 时安装）
+#   pip install -r requirements-local.txt
+# 注意：会拉取 PyTorch，体积较大（数百 MB ~ 数 GB），首次运行还会下载模型权重。
+# 若网络受限，可直接使用 EMBEDDING_PROVIDER=api 走云端 embedding 接口。
+# =============================================================================
+sentence-transformers>=2.7,<4.0

@@ -1,0 +1,207 @@
+{
+  "name": "auto_aftersales_eval",
+  "version": "1.0",
+  "description": "AutoRAG 汽车售后知识库问答系统 · 20 条评测集模板。所有涉及具体数值/条款/故障码的答案位置都用 [待补充] 标注，需要你依据真实资料填写。expected_sources 请填 data/documents 下的相对路径；expected_keywords 用于规则打分，请填答案中必须出现的字面串（如具体数值、部件名、故障码）。must_refuse=true 的条目用于检验系统是否会拒答无依据问题。",
+  "items": [
+    {
+      "id": "Q001",
+      "category": "保养",
+      "question": "首保应该在多少公里或多长时间内进行？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "检验系统能否召回保养周期表并原样保留数值；答案里必须出现具体间隔。"
+    },
+    {
+      "id": "Q002",
+      "category": "保养",
+      "question": "常规保养的周期是多久一次？包含哪些项目？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "多项目答案，检验引用是否覆盖多个片段。"
+    },
+    {
+      "id": "Q003",
+      "category": "油液",
+      "question": "我的车应该使用什么标号的机油？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "检验黏度等级这类精确串是否被正确引用，不要被模型改写成同义表述。"
+    },
+    {
+      "id": "Q004",
+      "category": "油液",
+      "question": "更换机油时需要同时更换机油滤清器吗？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "是非型问题，检验答案是否给出明确结论 + 依据。"
+    },
+    {
+      "id": "Q005",
+      "category": "易损件",
+      "question": "空气滤芯和空调滤芯多久更换一次？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "两个部件两个周期，检验答案结构是否清晰、引用是否可追溯。"
+    },
+    {
+      "id": "Q006",
+      "category": "易损件",
+      "question": "刹车片的更换标准是什么？磨损到多少毫米需要更换？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "含阈值数值，检验是否出现具体毫米数而不是模糊表述。"
+    },
+    {
+      "id": "Q007",
+      "category": "油液",
+      "question": "刹车油需要定期更换吗？更换周期是多少？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "检验周期类问题的召回与引用。"
+    },
+    {
+      "id": "Q008",
+      "category": "油液",
+      "question": "冷却液（防冻液）液位低于下限，可以自己加水补充吗？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "涉及操作风险，检验答案是否给出安全警示与「以手册为准」的限定。"
+    },
+    {
+      "id": "Q009",
+      "category": "保养",
+      "question": "火花塞多久需要更换？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "若资料按发动机型号区分周期，检验模型是否保留型号限定。"
+    },
+    {
+      "id": "Q010",
+      "category": "故障码",
+      "question": "仪表出现 P0420 故障码是什么意思？需要怎么处理？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "关键词类问题的典型用例：BM25 通道应能命中故障码字面串。"
+    },
+    {
+      "id": "Q011",
+      "category": "电气",
+      "question": "车辆长期停放，蓄电池会亏电吗？应该如何维护？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "开放型问题，检验答案是否控制在资料范围内、不额外编造参数。"
+    },
+    {
+      "id": "Q012",
+      "category": "轮胎",
+      "question": "胎压监测系统报警了，我该按什么标准检查胎压？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "检验能否召回标准胎压表，并保留车型/载荷等限定条件。"
+    },
+    {
+      "id": "Q013",
+      "category": "季节性",
+      "question": "夏季用车有哪些需要注意的检查项？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "清单型问题，检验答案条目与引用编号是否一一对应。"
+    },
+    {
+      "id": "Q014",
+      "category": "季节性",
+      "question": "冬季低温启动困难，官方建议的操作步骤是什么？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "步骤型问题，检验答案是否为有序步骤且每步带来源。"
+    },
+    {
+      "id": "Q015",
+      "category": "使用",
+      "question": "长途出行前需要做哪些检查？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "清单型问题，与 Q013 区分季节维度与出行维度。"
+    },
+    {
+      "id": "Q016",
+      "category": "使用",
+      "question": "空调不制冷可能是什么原因？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "诊断型问题，检验答案是否只列资料中给出的可能原因，不自由发挥。"
+    },
+    {
+      "id": "Q017",
+      "category": "故障诊断",
+      "question": "仪表盘上的各种警示灯分别代表什么含义？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "宽泛问题，可能召回多个片段，检验多引用 [1][2][3] 场景。"
+    },
+    {
+      "id": "Q018",
+      "category": "保修",
+      "question": "整车质保期是多久？哪些情况不属于保修范围？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "关键条款类问题，检验是否能召回免责条款原文并保留条件限定。"
+    },
+    {
+      "id": "Q019",
+      "category": "保修",
+      "question": "车辆故障需要索赔，具体流程是什么？需要准备哪些材料？",
+      "ground_truth": "[待补充]",
+      "expected_sources": ["[待补充]"],
+      "expected_keywords": ["[待补充]"],
+      "must_refuse": false,
+      "notes": "流程型问题，检验步骤完整性与引用可追溯性。"
+    },
+    {
+      "id": "Q020",
+      "category": "负样本",
+      "question": "请告诉我其他品牌同级车型的保养价格对比，以及 2027 款未上市车型的确切参数。",
+      "ground_truth": "知识库中没有其他品牌价格与未上市车型参数，应当明确拒答并给出确认渠道。",
+      "expected_sources": [],
+      "expected_keywords": ["未找到", "无法"],
+      "must_refuse": true,
+      "notes": "负样本：检验系统在无依据时是否拒答，而不是编造价格与参数。"
+    }
+  ]
+}

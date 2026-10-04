@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AutoRAG · 汽车售后知识库控制台</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1e222b;
+    --line: #2a2f3a;
+    --text: #e6e8ee;
+    --muted: #9aa3b2;
+    --brand: #4f8cff;
+    --ok: #3fbf7f;
+    --warn: #e0a23c;
+    --err: #e05c5c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.65 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  header {
+    padding: 16px 22px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 17px; margin: 0; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  main { max-width: 1080px; margin: 0 auto; padding: 18px 22px 60px; }
+  section {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 16px;
+  }
+  section h2 { font-size: 14px; margin: 0 0 10px; color: var(--muted); font-weight: 600; }
+  textarea, input[type="text"] {
+    width: 100%; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px; font: inherit;
+    resize: vertical;
+  }
+  textarea { min-height: 74px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  button {
+    background: var(--brand); color: #fff; border: 0; border-radius: 8px;
+    padding: 9px 16px; font: inherit; cursor: pointer;
+  }
+  button.ghost { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  label.chk { color: var(--muted); font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
+  .status { margin-left: auto; font-size: 12px; color: var(--muted); }
+  pre {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; overflow: auto; max-height: 420px; white-space: pre-wrap; word-break: break-word;
+    font: 12.5px/1.6 "Cascadia Mono", Consolas, monospace; margin: 10px 0 0;
+  }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; }
+  .badge.ok { background: rgba(63,191,127,.15); color: var(--ok); }
+  .badge.warn { background: rgba(224,162,60,.15); color: var(--warn); }
+  .badge.err { background: rgba(224,92,92,.15); color: var(--err); }
+  .answer { white-space: pre-wrap; line-height: 1.8; }
+  .cite { background: var(--panel-2); border-left: 3px solid var(--brand); padding: 8px 12px;
+          border-radius: 6px; margin-top: 8px; font-size: 13px; }
+  .cite .meta { color: var(--muted); font-size: 12px; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  a { color: var(--brand); }
+</style>
+</head>
+<body>
+<header>
+  <h1>AutoRAG · 汽车售后知识库控制台</h1>
+  <span class="sub">仅用于本地调试接口，不含任何前端框架</span>
+</header>
+
+<main>
+  <section>
+    <h2>1. 服务状态</h2>
+    <div class="row">
+      <button id="btnHealth" class="ghost">检查 /health</button>
+      <button id="btnStats" class="ghost">查看 /stats</button>
+      <button id="btnIngest" class="ghost">扫描入库 /ingest</button>
+      <button id="btnRebuild" class="ghost">全量重建（rebuild=true）</button>
+      <span class="status" id="status">就绪</span>
+    </div>
+    <pre id="sysOut">点击上方按钮查看运行时状态。所有接口都可用 /docs 页面手动调用。</pre>
+    <div class="hint">
+      接口文档：<a href="/docs" target="_blank">/docs</a> ·
+      健康检查：<a href="/api/v1/health" target="_blank">/api/v1/health</a> ·
+      统计：<a href="/api/v1/stats" target="_blank">/api/v1/stats</a>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 提问（RAG 问答，带引用）</h2>
+    <textarea id="question" placeholder="例如：更换机油后需要复位保养提醒吗？"></textarea>
+    <div class="row">
+      <button id="btnAsk">提问 /chat</button>
+      <button id="btnRetrieve" class="ghost">只看召回 /retrieve</button>
+      <label class="chk"><input type="checkbox" id="chkDebug" /> 返回召回明细</label>
+      <label class="chk">top_k <input type="text" id="topK" value="5" style="width:52px" /></label>
+    </div>
+    <div id="answerBox"></div>
+  </section>
+
+  <section>
+    <h2>3. 原始响应</h2>
+    <pre id="out">优先看这里：本区域始终打印服务端返回的原始 JSON，便于核对字段。</pre>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const out = $('out');
+const sysOut = $('sysOut');
+const statusEl = $('status');
+
+const API = '/api/v1';
+
+function setStatus(text, kind) {
+  statusEl.textContent = text;
+  statusEl.className = 'status';
+  if (kind) {
+    const badge = document.createElement('span');
+    badge.className = 'badge ' + kind;
+    badge.textContent = kind === 'ok' ? '正常' : kind === 'warn' ? '部分可用' : '错误';
+    statusEl.prepend(badge);
+    statusEl.prepend(document.createTextNode(' '));
+  }
+}
+
+function print(target, data) {
+  target.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+}
+
+async function call(method, path, body) {
+  const options = { method, headers: {} };
+  if (body !== undefined) {
+    options.headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(body);
+  }
+  const response = await fetch(path, options);
+  const text = await response.text();
+  let parsed;
+  try { parsed = JSON.parse(text); } catch (e) { parsed = text; }
+  if (!response.ok) {
+    const detail = parsed && parsed.detail ? parsed.detail : text;
+    throw new Error('HTTP ' + response.status + '：' + detail);
+  }
+  return parsed;
+}
+
+async function guard(button, fn) {
+  button.disabled = true;
+  setStatus('请求中…');
+  try {
+    await fn();
+  } catch (error) {
+    setStatus('失败', 'err');
+    print(out, String(error.message || error));
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$('btnHealth').onclick = (event) => guard(event.target, async () => {
+  const data = await call('GET', API + '/health');
+  print(sysOut, data);
+  setStatus(data.status, data.status === 'ok' ? 'ok' : 'warn');
+});
+
+$('btnStats').onclick = (event) => guard(event.target, async () => {
+  const data = await call('GET', API + '/stats');
+  print(sysOut, data);
+  setStatus('统计已刷新', 'ok');
+});
+
+$('btnIngest').onclick = (event) => guard(event.target, async () => {
+  const data = await call('POST', API + '/ingest', {});
+  print(sysOut, data);
+  setStatus('入库完成', 'ok');
+});
+
+$('btnRebuild').onclick = (event) => guard(event.target, async () => {
+  if (!confirm('将清空向量库与 BM25 索引并全量重建，确定继续？')) return;
+  const data = await call('POST', API + '/ingest', { rebuild: true, reset_registry: true });
+  print(sysOut, data);
+  setStatus('重建完成', 'ok');
+});
+
+function renderAnswer(data) {
+  const box = $('answerBox');
+  box.innerHTML = '';
+
+  const head = document.createElement('div');
+  head.className = 'row';
+  const mode = document.createElement('span');
+  mode.className = 'badge ' + (data.refused ? 'warn' : 'ok');
+  mode.textContent = data.refused ? '兜底回答（未调用大模型）' : (data.retrieval_mode || '');
+  head.appendChild(mode);
+  if (data.latency) {
+    const latency = document.createElement('span');
+    latency.className = 'cite meta';
+    latency.textContent = ' 检索 ' + data.latency.retrieve_ms + 'ms · 生成 ' +
+      (data.latency.generate_ms || 0) + 'ms · 合计 ' + data.latency.total_ms + 'ms';
+    head.appendChild(latency);
+  }
+  box.appendChild(head);
+
+  const answer = document.createElement('div');
+  answer.className = 'answer';
+  answer.textContent = data.answer || '(无 answer 字段)';
+  box.appendChild(answer);
+
+  (data.warnings || []).forEach((warning) => {
+    const div = document.createElement('div');
+    div.className = 'cite';
+    div.style.borderLeftColor = '#e0a23c';
+    div.textContent = '⚠ ' + warning;
+    box.appendChild(div);
+  });
+
+  (data.citations || []).forEach((cite) => {
+    const div = document.createElement('div');
+    div.className = 'cite';
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = '[' + cite.index + '] ' + cite.source +
+      (cite.section ? ' · ' + cite.section : '') + ' · 片段 #' + cite.position +
+      ' · 相关度 ' + cite.score;
+    const snippet = document.createElement('div');
+    snippet.textContent = cite.snippet || '';
+    div.appendChild(meta);
+    div.appendChild(snippet);
+    box.appendChild(div);
+  });
+}
+
+function buildBody() {
+  const topK = parseInt($('topK').value, 10);
+  const body = {
+    question: $('question').value.trim(),
+    debug: $('chkDebug').checked,
+  };
+  if (!Number.isNaN(topK)) body.top_k = topK;
+  return body;
+}
+
+$('btnAsk').onclick = (event) => guard(event.target, async () => {
+  const body = buildBody();
+  if (!body.question) { setStatus('请先输入问题', 'warn'); return; }
+  const data = await call('POST', API + '/chat', body);
+  print(out, data);
+  renderAnswer(data);
+  setStatus('完成', data.warnings && data.warnings.length ? 'warn' : 'ok');
+});
+
+$('btnRetrieve').onclick = (event) => guard(event.target, async () => {
+  const body = buildBody();
+  if (!body.question) { setStatus('请先输入问题', 'warn'); return; }
+  const data = await call('POST', API + '/retrieve', { query: body.question, top_k: body.top_k });
+  print(out, data);
+  $('answerBox').innerHTML = '';
+  setStatus('召回 ' + (data.results || []).length + ' 条', 'ok');
+});
+</script>
+</body>
+</html>

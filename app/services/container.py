@@ -1,0 +1,76 @@
+"""服务装配：把 embedding / 向量库 / BM25 / 检索器 / LLM / 问答链路拼起来。
+
+启动阶段遵循"能起来就先起来"的原则：
+- LLM 客户端永远可构造（只在使用时校验 Key）；
+- 向量库或 embedder 初始化失败时，把原因记进 container.init_errors，
+  服务照常提供 /health 与 /api/v1/stats，业务接口返回 503 并附带原因，
+  方便你本地排错，而不是看到一个没有任何信息的启动崩溃。
+"""
+from __future__ import annotations
+
+from app.api.deps import ServiceContainer
+from app.config import Settings
+from app.core.bm25 import BM25Index
+from app.core.embedding import build_embedder
+from app.core.llm_client import LLMClient
+from app.core.retriever import HybridRetriever
+from app.core.vector_store import VectorStore
+from app.logging_conf import get_logger
+from app.services.ingestion_service import IngestionService
+from app.services.eval_service import EvaluationService
+from app.services.rag_pipeline import QAEngine
+
+logger = get_logger(__name__)
+
+
+def build_container(settings: Settings) -> ServiceContainer:
+    settings.ensure_directories()
+
+    container = ServiceContainer(settings=settings, llm=LLMClient(settings))
+
+    # ---- Embedding ----
+    try:
+        container.embedder = build_embedder(settings)
+    except Exception as exc:
+        message = f"Embedding 初始化失败：{exc}"
+        logger.error(message)
+        container.init_errors.append(message)
+
+    # ---- 向量库 ----
+    if container.embedder is not None:
+        try:
+            container.vector_store = VectorStore(
+                persist_dir=str(settings.chroma_dir),
+                collection_name=settings.chroma_collection,
+                embedder=container.embedder,
+            )
+        except Exception as exc:
+            message = f"向量库初始化失败（{settings.chroma_dir}）：{exc}"
+            logger.error(message)
+            container.init_errors.append(message)
+
+    # ---- BM25 ----
+    container.bm25 = BM25Index(persist_path=settings.bm25_index_path)
+
+    # ---- 检索器 / 入库 / 问答 ----
+    if container.vector_store is not None:
+        container.retriever = HybridRetriever(settings, container.vector_store, container.bm25)
+        container.ingestion = IngestionService(settings, container.vector_store, container.bm25)
+        container.qa = QAEngine(settings, container.retriever, container.llm)
+        container.evaluation = EvaluationService(settings, container.qa)
+
+        # BM25 索引：优先从磁盘加载，缺失或与向量库条数不符时重建
+        loaded = container.bm25.load()
+        collection_count = container.vector_store.count()
+        if not loaded or container.bm25.size != collection_count:
+            logger.info(
+                "BM25 索引需要重建（磁盘 size=%d，向量库 count=%d）",
+                container.bm25.size,
+                collection_count,
+            )
+            container.ingestion.rebuild_bm25()
+
+    for note in container.degraded_notes():
+        logger.warning("配置提示：%s", note)
+
+    return container

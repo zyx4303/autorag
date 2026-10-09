@@ -150,6 +150,9 @@ def check_python(report: Report) -> None:
         ("httpx", "httpx"),
         ("chromadb", "chromadb"),
         ("multipart", "python-multipart"),
+        # Agent 编排依赖（缺失时只有 /agent/* 接口不可用，其余功能不受影响）
+        ("langgraph", "langgraph"),
+        ("aiosqlite", "aiosqlite"),
     ]
     for module_name, package_name in dependencies:
         try:
@@ -748,6 +751,10 @@ def main() -> int:
         emit("  2) python scripts/ingest.py --rebuild")
         emit("  3) curl -X POST http://127.0.0.1:8000/api/v1/retrieve -H \"Content-Type: application/json\" -d \"{\\\"query\\\":\\\"你的测试问题\\\"}\"")
         emit("  4) curl -X POST http://127.0.0.1:8000/api/v1/chat -H \"Content-Type: application/json\" -d \"{\\\"question\\\":\\\"你的测试问题\\\"}\"")
+        emit("  5) Agent（自主调用工具）:")
+        emit("     curl http://127.0.0.1:8000/api/v1/agent/status   # 看可用工具与业务库规模")
+        emit("     curl -X POST http://127.0.0.1:8000/api/v1/agent/chat -H \"Content-Type: application/json\" -d \"{\\\"session_id\\\":\\\"demo\\\",\\\"message\\\":\\\"P0195 故障码什么意思\\\"}\"")
+        emit("     python tests/agent_smoke_test.py                     # Agent 行为测试（确定性，不联网）")
     else:
         emit("")
         emit("结论：存在需要处理的项目，请先按上面提示修复后重新运行本脚本。")

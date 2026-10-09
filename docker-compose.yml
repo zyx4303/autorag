@@ -22,6 +22,13 @@ services:
       UPLOAD_DIR: /app/data/uploads
       REGISTRY_PATH: /app/data/registry.json
       BM25_INDEX_PATH: /app/data/bm25_index.json
+      # FreshGuard 声明库 与 Agent（业务工具库 + 对话 checkpoint）
+      # 注意：这三个 SQLite 文件都在挂载目录下，必须对容器内的 appuser(uid=10001) 可写，
+      # 否则启动时建库会失败（Linux 上首次运行前执行： sudo chown -R 10001:10001 ./data）
+      GUARD_DB_PATH: /app/data/claims.db
+      AGENT_KB_PATH: /app/data/agent_kb.db
+      AGENT_CHECKPOINT_PATH: /app/data/agent_checkpoints.db
+      AGENT_MAX_ITERATIONS: "6"
       API_HOST: 0.0.0.0
       API_PORT: "8000"
     ports:

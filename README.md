@@ -187,6 +187,11 @@ AutoRAG/
 │   │   ├── extractor.py         # LLM 结构化抽取 + 证据子串校验 + 增量复用
 │   │   ├── store.py             # SQLite 声明版本库（doc_version / chunk_hash / claim）
 │   │   └── service.py           # 增量抽取编排、跨版本差分、影响面反查
+│   ├── agent/                   # LangGraph Agent：自主决定调用哪些工具
+│   │   ├── kb.py                # 业务工具数据层（故障码 / 保养周期，SQLite + 表格机械解析）
+│   │   ├── tools.py             # 四个工具（search_kb / lookup_dtc / compute_maintenance / ask_user）
+│   │   ├── graph.py             # 状态图：agent / tools / finalize 三节点 + 条件路由
+│   │   └── service.py           # 服务封装：一次性调用与 SSE 事件流
 │   └── web/
 │       ├── console.html         # 内置调试页（打开 http://127.0.0.1:8000/ 即用）
 │       └── guard.html           # 变更审计面板（打开 http://127.0.0.1:8000/guard）
@@ -332,6 +337,11 @@ curl -X POST http://127.0.0.1:8000/api/v1/chat ^
 | GET | `/api/v1/eval/dataset` | 查看评测集概况与待补充字段 |
 | POST | `/api/v1/eval/run` | 运行评测集（**会消耗 token**），报告落盘到 `eval/results/` |
 | GET | `/api/v1/eval/reports` | 列出历史评测报告 |
+| POST | `/api/v1/agent/chat` | **Agent 问答**（LangGraph 自主调用工具），返回 `answer` + `citations` + `tool_trace` |
+| POST | `/api/v1/agent/chat/stream` | Agent 问答 SSE 流式：推送节点决策与每个工具的入参出参 |
+| GET | `/api/v1/agent/tools` | 列出四个工具及完整 JSON schema |
+| GET | `/api/v1/agent/status` | Agent 状态：可用工具、迭代上限、业务库规模 |
+| POST | `/api/v1/agent/kb/rebuild` | 从 `data/documents` 重建业务工具知识库（故障码 / 保养周期） |
 | GET | `/api/v1/guard/panel` | FreshGuard 变更审计面板（HTML，也可用 `http://127.0.0.1:8000/guard`） |
 | POST | `/api/v1/guard/extract?source=…` | 对单个文档做增量抽取（`force=true` 则全量重抽） |
 | POST | `/api/v1/guard/scan` | 扫描知识库并对所有文档增量抽取（**首次会消耗较多 token**） |
@@ -833,7 +843,148 @@ FreshGuard 就是在片段之上再加一层「原子化声明」，让"答案�
 
 ---
 
-## 14. 需要你补充的清单（`[待补充]` 汇总）
+## 14. LangGraph Agent：从「固定 pipeline」升级为「自主调用工具」
+
+前 13 节描述的是**固定流水线**：问题进来 → 检索 → 生成。它的问题在于流程写死了，
+不管问题难易都走同样的路。第 14 节把它升级为 **Agent**：
+由大模型在循环里自主决定调哪个工具、调几次、是否需要先追问用户。
+
+### 14.1 状态图结构
+
+显式状态图（`StateGraph` + 三个节点 + 一条条件边），**不使用 LangChain 的链式抽象**：
+
+```
+                 ┌────────────────────────────────────────────┐
+                 │                                            │
+                 ▼                                            │
+            ┌─────────┐   模型要求调用工具   ┌───────────┐     │
+   START ──▶│  agent  │ ─────────────────▶ │   tools   │ ────┘
+            │  (LLM)  │                    │  (执行)   │
+            └─────────┘                    └───────────┘
+                 │
+                 │ 模型直接给出答案 / 触达迭代上限 / 需要追问用户
+                 ▼
+            ┌──────────┐
+            │ finalize │ ──▶ END
+            └──────────┘
+```
+
+**状态字段**：`messages`（对话历史，用 `add_messages` reducer 自动累积）、
+`retrieved_docs`、`current_tool_calls`、`final_answer`、`iteration_count`、
+以及为可观测性额外增加的 `tool_trace`、`citations`、`needs_user_input`、`stop_reason`。
+
+**三道停止条件**（满足任一即收尾，避免无效消耗）：
+
+| 条件 | 行为 |
+| --- | --- |
+| 模型不再请求工具调用 | 直接进入 finalize，输出最终答案 |
+| `iteration_count` 达到 6 | 强制收尾，如实告知用户"已到上限"，并附上已获得的结果摘要 |
+| 模型调用 `ask_user` | 进入 finalize，把问题交回用户；**同一 session 的上下文通过 checkpoint 保留**，用户补充后自动继续 |
+
+### 14.2 四个工具
+
+工具描述刻意写清「适用 / 不适用 / 边界 / 返回」，因为这是模型能否正确选工具的唯一依据。
+
+| 工具 | 作用 | 数据来源 | 边界（写进了 schema） |
+| --- | --- | --- | --- |
+| `search_kb` | 知识库混合检索（向量 + BM25 + RRF + 重排），返回带来源的原文片段 | 现有检索链路（**一行检索逻辑都没重写**） | 检索为空时必须如实说未找到，禁止编造库里没有的参数 |
+| `lookup_dtc` | 故障码精确查询 / 按症状词模糊搜索 | SQLite（从示例码表机械解析建库，251 条） | 未命中时提示改用 keyword 或 search_kb；不要把范围码当具体码解释 |
+| `compute_maintenance` | 按里程与车型算现在该做哪些保养 | SQLite（示例保养周期表，9 项） | 缺车型或里程必须调 ask_user；车型不支持时如实告知，禁止套用其它车型 |
+| `ask_user` | 追问缺失信息（虚拟工具，无副作用） | — | 信息已足够时禁止调用；一次最多 3 个问题 |
+
+### 14.3 接口与调用示例
+
+```bash
+# 一次性返回（含完整 tool_trace）
+curl -X POST http://127.0.0.1:8000/api/v1/agent/chat \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"demo","message":"P0195 故障码什么意思"}'
+
+# SSE 流式：能看到 agent 决策与每个工具的入参出参
+curl -N -X POST http://127.0.0.1:8000/api/v1/agent/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"demo","message":"我该保养了吗"}'
+```
+
+SSE 事件序列（真实抓取）：
+
+```text
+start -> node(agent 决定调工具) -> tool_start -> tool_result
+      -> node(agent) -> node(tools) -> ... -> answer -> done
+```
+
+`tool_trace` 字段示例（这是"透明性"的落点，也是以后做 Agent 评测的数据基础）：
+
+```json
+{"step": 1, "tool": "lookup_dtc", "arguments": {"dtc_code": "P0195"},
+ "ok": true, "duration_ms": 0, "result_count": null, "error": ""}
+```
+
+### 14.4 本地起服务
+
+```bash
+# 1) 装依赖（Agent 依赖 langgraph 与 aiosqlite，已在 requirements.txt 里）
+pip install -r requirements.txt
+
+# 2) 业务工具知识库会在启动时自动建立（从 data/documents 下的示例码表与保养表机械解析）
+#    想手动重建： POST /api/v1/agent/kb/rebuild?force=true
+
+# 3) 起服务
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+# 容器方式： docker compose up --build
+```
+
+```bash
+# 4) 验证
+curl http://127.0.0.1:8000/api/v1/agent/status   # 工具列表、业务库规模、迭代上限
+curl http://127.0.0.1:8000/api/v1/agent/tools    # 四个工具的完整 JSON schema
+```
+
+### 14.5 实测记录（本机真实执行，未使用编造数据）
+
+| 场景 | 实测行为 |
+| --- | --- |
+| 纯知识问题：`虚构车型A多久换一次机油？空气滤清器呢？` | 调用 `search_kb` 后直接作答，迭代 2 次，答案带 `[n]` 角标与来源 |
+| 故障码问题：`P0195 故障码什么意思` | `lookup_dtc -> search_kb` 两步，迭代 3 次，引用 7 条；库中没有检修步骤时**如实说明没有** |
+| 信息不足：`我该保养了吗` | 先调 `ask_user`，追问车型 / 里程 / 使用月数，`stop_reason=ask_user` |
+| 补充信息后（同 session） | checkpoint 续接，调 `compute_maintenance` 得出 5 项到期保养，并标注数据为示例 |
+| SSE 流式 | 事件序列含 `tool_start` / `tool_result`，可看到每步入参出参与耗时 |
+| 迭代上限 | 脚本化测试中模型连续 20 轮要求调用工具，图在第 6 轮停止并给出摘要 |
+| 工具报错 | `lookup_dtc(P9999)` 未命中后，模型改用 `keyword` 参数重试成功（未崩溃） |
+
+测试规模：原有 `tests/smoke_test.py` **68 项**（含新增的 Agent schema 不变量）、
+新增 `tests/agent_smoke_test.py` **79 项**（覆盖工具链、追问、上限、错误恢复、JSON 容错）。
+
+### 14.6 已知失败样例与 AI 辅助边界
+
+**已修复的实现缺陷**（都是跑起来才发现的，记录在此避免重复踩）：
+
+1. **同步 checkpoint 在异步图里不可用**：LangGraph 的异步图会直接抛
+   `NotImplementedError: The SqliteSaver does not support async methods`，
+   必须改用 `AsyncSqliteSaver`（并装 `aiosqlite`），且它的初始化是异步的，
+   因此只能在第一次请求的事件循环里延迟建好。
+2. **`tool_call_id` 丢失导致 422**：`add_messages` 会把普通 dict 自动转成
+   LangChain 的 `AIMessage` / `ToolMessage`，转换回 OpenAI 格式时若漏掉 `tool_call_id`，
+   DeepSeek 会报 `messages[i]: missing field 'tool_call_id'`。
+3. **节点里 `yield` 的事件会被丢弃**：LangGraph 把节点产出当作状态增量，
+   非状态字段直接忽略（实测 `tool_start` 全部丢失）。正确做法是
+   `StreamWriter` + `stream_mode=["updates","custom"]`。
+
+**尚未解决的局限**（如实列出）：
+
+- 工具选择依赖模型判断，实测同一问题可能出现"多查一次"的情况（如两次 `search_kb`），
+  结果正确但调用次数不是最优；如果要做成本优化，需要引入更严格的路由提示词或小模型分类器。
+- `ask_user` 的追问措辞由模型生成，偶发问得过于宽泛（例如同时问三项），
+  目前只靠 schema 的 `maxItems=3` 约束，没有做措辞质量校验。
+- 业务工具知识库来自**示例数据**（虚构车型 A + 自编码表），
+  代码结构留好了 SQLite 接口，但要接真实车型数据仍需替换数据源。
+
+**AI 辅助开发边界**：状态图结构、工具 schema 描述、停止条件与容错策略由人设计；
+示例码表解析、正则与样板代码有 AI 辅助生成，全部逻辑经人工复核并由 79 项确定性测试覆盖。
+
+---
+
+## 15. 需要你补充的清单（`[待补充]` 汇总）
 
 1. `.env`：`LLM_API_KEY`、`LLM_BASE_URL`（如需改）、`LLM_MODEL`（如需改）；
 2. `.env`：若用 `EMBEDDING_PROVIDER=api`，还需 `EMBEDDING_API_KEY`、`EMBEDDING_BASE_URL`、
@@ -845,7 +996,7 @@ FreshGuard 就是在片段之上再加一层「原子化声明」，让"答案�
 
 ---
 
-## 15. 下一步可做的扩展（按性价比排序）
+## 16. 下一步可做的扩展（按性价比排序）
 
 1. 接入 **rerank 模型**（如 bge-reranker）替换启发式重排；
 2. 增加 **多轮对话**：按 `session_id` 维护历史，并对历史问题做查询改写；
@@ -856,7 +1007,7 @@ FreshGuard 就是在片段之上再加一层「原子化声明」，让"答案�
 
 ---
 
-## 16. 作为求职作品集使用
+## 17. 作为求职作品集使用
 
 本项目的定位是**本地演示 + 代码仓库**，不公开部署服务（原因见 [portfolio.md](portfolio.md)：
 文档授权与 ICP/AI 备案成本）。配套材料：

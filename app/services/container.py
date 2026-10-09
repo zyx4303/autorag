@@ -84,6 +84,38 @@ def build_container(settings: Settings) -> ServiceContainer:
             )
             container.ingestion.rebuild_bm25()
 
+    # ---- Agent（LangGraph）：业务工具知识库 + 状态图 + checkpoint ----
+    # 放在检索器之后，因为 search_kb 工具需要复用已有的检索链路
+    try:
+        from app.agent.kb import AgentKbStore
+        from app.agent.service import AgentService
+
+        container.agent_kb = AgentKbStore(settings.agent_kb_path)
+
+        # checkpoint 交给 AgentService 延迟初始化：
+        # 异步图要求 AsyncSqliteSaver，而它的初始化本身是异步的，
+        # 在同步的容器构建阶段无法完成（实测报 NotImplementedError）。
+        # 这里传 None，由服务在第一次请求的事件循环里建好 SqliteSaver 并缓存。
+        container.agent = AgentService(
+            settings=settings,
+            llm=container.llm,
+            retriever=container.retriever,
+            kb_store=container.agent_kb,
+            checkpointer=None,
+        )
+        # 惰性建库：库为空时才解析示例文档，避免每次启动都写库
+        bootstrap = container.agent.bootstrap_kb(force=False)
+        if not bootstrap.get("skipped"):
+            logger.info(
+                "Agent 业务知识库已建库：故障码 %d 条，保养项目 %d 条",
+                bootstrap.get("dtc_inserted"),
+                bootstrap.get("maintenance_inserted"),
+            )
+    except Exception as exc:
+        message = f"Agent 模块初始化失败：{type(exc).__name__}: {exc}"
+        logger.error(message)
+        container.init_errors.append(message)
+
     for note in container.degraded_notes():
         logger.warning("配置提示：%s", note)
 

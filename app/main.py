@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.api import routes_eval, routes_guard, routes_ingest, routes_qa, routes_system
+from app.api import routes_agent, routes_eval, routes_guard, routes_ingest, routes_qa, routes_system
 from app.api.deps import ServiceContainer, get_container, verify_api_key
 from app.config import PROJECT_ROOT, get_settings
 from app.logging_conf import get_logger, setup_logging
@@ -91,6 +91,7 @@ app.include_router(routes_ingest.router, prefix=api_prefix)
 app.include_router(routes_qa.router, prefix=api_prefix)
 app.include_router(routes_eval.router, prefix=api_prefix)
 app.include_router(routes_guard.router, prefix=api_prefix)
+app.include_router(routes_agent.router, prefix=api_prefix)
 
 
 @app.exception_handler(Exception)

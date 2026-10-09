@@ -321,6 +321,54 @@ def test_guard_claims() -> None:
     check("变更片段需重抽", [c.chunk_id for c in to_extract] == ["c2"], str([c.chunk_id for c in to_extract]))
 
 
+def test_agent_invariants() -> None:
+    """Agent 模块的 schema 不变量。
+
+    更深的行为测试（图路由、停止条件、工具链）在 tests/agent_smoke_test.py，
+    那里用脚本化 LLM 精确控制每一步；这里只做不依赖网络的静态校验，
+    保证"工具描述必须写清边界"这条要求在 CI 里也不会被悄悄破坏。
+    """
+    print("\n[8] Agent 工具 schema 不变量")
+    from app.agent.graph import AGENT_MAX_ITERATIONS, parse_tool_calls
+    from app.agent.tools import ALL_TOOL_SPECS
+
+    names = [spec["function"]["name"] for spec in ALL_TOOL_SPECS]
+    check("四个业务工具齐全", set(names) == {"search_kb", "lookup_dtc", "compute_maintenance", "ask_user"}, str(names))
+    check("工具名唯一", len(names) == len(set(names)))
+
+    for spec in ALL_TOOL_SPECS:
+        function = spec["function"]
+        name = function["name"]
+        description = function.get("description", "")
+        parameters = function.get("parameters", {})
+        check(f"{name} 参数是 object schema", parameters.get("type") == "object", str(parameters.get("type")))
+        check(f"{name} 描述含【适用】与【边界】", "【适用】" in description and "【边界】" in description)
+        check(f"{name} 描述禁止笼统表述", "帮你查资料" not in description)
+        check(f"{name} 描述长度 > 150 字", len(description) > 150, str(len(description)))
+
+    check("迭代上限固定为 6", AGENT_MAX_ITERATIONS == 6, str(AGENT_MAX_ITERATIONS))
+
+    # compute_maintenance 的必备参数：车型与里程都必填，避免模型瞎猜
+    compute = next(s for s in ALL_TOOL_SPECS if s["function"]["name"] == "compute_maintenance")
+    check(
+        "compute_maintenance 要求 mileage 与 car_model 必填",
+        set(compute["function"]["parameters"].get("required", [])) == {"mileage", "car_model"},
+        str(compute["function"]["parameters"].get("required")),
+    )
+    check(
+        "ask_user 限制最多 3 个问题",
+        next(
+            s for s in ALL_TOOL_SPECS if s["function"]["name"] == "ask_user"
+        )["function"]["parameters"]["properties"]["questions"].get("maxItems") == 3,
+    )
+
+    # tool_calls 解析的容错不变量
+    check(
+        "非法 JSON 参数不会抛异常",
+        parse_tool_calls([{"id": "x", "function": {"name": "search_kb", "arguments": "{坏"}}])[0]["arguments"] == {},
+    )
+
+
 def main() -> int:
     print("=" * 68)
     print("AutoRAG 冒烟测试（纯逻辑，不联网、不需要 API Key、不调用大模型）")
@@ -335,6 +383,7 @@ def main() -> int:
     test_citations()
     test_hash_embedder()
     test_guard_claims()
+    test_agent_invariants()
 
     print("\n" + "=" * 68)
     print(f"结果：通过 {PASSED} 项，失败 {FAILED} 项")

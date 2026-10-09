@@ -16,6 +16,10 @@ httpx>=0.27,<1.0
 pydantic>=2.7,<3.0
 pydantic-settings>=2.3,<3.0
 python-dotenv>=1.0,<2.0
+# Agent 编排（LangGraph 状态图）+ SQLite checkpoint（异步需要 aiosqlite）
+langgraph>=0.2,<2.0
+langgraph-checkpoint-sqlite>=2.0
+aiosqlite>=0.20
 
 # =============================================================================
 # 以下为可选能力，需要时手动安装（见 README「可选依赖」章节）：

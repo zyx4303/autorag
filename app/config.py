@@ -146,6 +146,16 @@ class Settings(BaseModel):
     guard_db_path_raw: str = Field(
         default_factory=lambda: _env_str("GUARD_DB_PATH", "./data/claims.db")
     )
+    # ---- Agent（LangGraph）----
+    agent_kb_path_raw: str = Field(
+        default_factory=lambda: _env_str("AGENT_KB_PATH", "./data/agent_kb.db")
+    )
+    agent_checkpoint_path_raw: str = Field(
+        default_factory=lambda: _env_str("AGENT_CHECKPOINT_PATH", "./data/agent_checkpoints.db")
+    )
+    agent_max_iterations: int = Field(
+        default_factory=lambda: _env_int("AGENT_MAX_ITERATIONS", 6)
+    )
 
     # ---- 切分 ----
     chunk_size: int = Field(default_factory=lambda: _env_int("CHUNK_SIZE", 600))
@@ -197,6 +207,20 @@ class Settings(BaseModel):
     def guard_db_path(self) -> Path:
         """FreshGuard 声明库（SQLite）路径。"""
         return _resolve_path(self.guard_db_path_raw, "./data/claims.db")
+
+    @property
+    def agent_kb_path(self) -> Path:
+        """Agent 业务工具的结构化知识库（故障码 / 保养周期）。"""
+        return _resolve_path(self.agent_kb_path_raw, "./data/agent_kb.db")
+
+    @property
+    def agent_checkpoint_path(self) -> Path:
+        """Agent 对话 checkpoint（LangGraph SqliteSaver）。
+
+        刻意与业务库分开：SqliteSaver 自己管理连接，
+        与业务查询共用同一连接会互相干扰（详见 app/agent/service.py 注释）。
+        """
+        return _resolve_path(self.agent_checkpoint_path_raw, "./data/agent_checkpoints.db")
 
     @property
     def chunk_overlap_effective(self) -> int:
@@ -269,6 +293,8 @@ class Settings(BaseModel):
             self.registry_path.parent,
             self.bm25_index_path.parent,
             self.guard_db_path.parent,
+            self.agent_kb_path.parent,
+            self.agent_checkpoint_path.parent,
         ):
             path.mkdir(parents=True, exist_ok=True)
 

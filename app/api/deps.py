@@ -38,6 +38,11 @@ class ServiceContainer:
     # FreshGuard：知识库变更影响分析（声明库 + 差分服务）
     claim_store: Optional[Any] = None
     drift: Optional[Any] = None
+    # Agent：LangGraph 状态图 + 业务工具知识库
+    agent_kb: Optional[Any] = None
+    agent: Optional[Any] = None
+    # SqliteSaver 的上下文管理器：必须常驻，否则连接会被回收关闭
+    agent_checkpoint_ctx: Optional[Any] = None
     init_errors: List[str] = field(default_factory=list)
 
     @property

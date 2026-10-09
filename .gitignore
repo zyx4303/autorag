@@ -32,6 +32,10 @@ data/registry.json
 data/bm25_index.json
 data/claims.db
 data/claims.db-journal
+data/agent_kb.db
+data/agent_kb.db-journal
+data/agent_checkpoints.db
+data/agent_checkpoints.db-journal
 data/preflight_report.txt
 eval/results/
 
@@ -56,3 +60,11 @@ Thumbs.db
 # 简历编译工作目录与个人脚本（仅本地使用）
 _resume2/
 *.bat
+
+# 测试产生的临时目录与简历编译工作区（仅本地）
+data/_agent_test_tmp/
+data/_smoke_tmp/
+_resume2/
+_resume3/
+*.db-shm
+*.db-wal

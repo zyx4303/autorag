@@ -29,6 +29,15 @@ class LLMResult:
     model: str = ""
     usage: Dict[str, Any] = field(default_factory=dict)
     finish_reason: str = ""
+    # 工具调用（Function Calling）：Agent 模式下用来判断"模型想调哪个工具"
+    tool_calls: List[Dict[str, Any]] = field(default_factory=list)
+    # 原始 assistant 消息：回传给下一轮请求时必须原样带上，
+    # 否则模型会认为自己的 tool_calls 不存在，导致多轮工具调用失败
+    raw_message: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def wants_tool_call(self) -> bool:
+        return bool(self.tool_calls)
 
     @property
     def prompt_tokens(self) -> Optional[int]:
@@ -81,12 +90,14 @@ class LLMClient:
 
     def _payload(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         temperature: Optional[float],
         max_tokens: Optional[int],
         stream: bool,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
     ) -> Dict[str, Any]:
-        return {
+        payload: Dict[str, Any] = {
             "model": self._settings.llm_model,
             "messages": messages,
             "temperature": (
@@ -95,6 +106,13 @@ class LLMClient:
             "max_tokens": int(max_tokens or self._settings.llm_max_tokens),
             "stream": stream,
         }
+        if tools:
+            payload["tools"] = tools
+            # 只在调用方明确要求时下发 tool_choice；
+            # 默认 auto 由服务端决定，避免某些兼容网关不认这个字段
+            if tool_choice:
+                payload["tool_choice"] = tool_choice
+        return payload
 
     @staticmethod
     def _explain_status(status: int, body: str) -> str:
@@ -112,13 +130,20 @@ class LLMClient:
     # ------------------------------------------------------------------ #
     async def chat(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
     ) -> LLMResult:
-        """一次性返回完整回答。"""
+        """一次性返回完整回答。
+
+        tools 非空时启用 Function Calling：模型可能不返回文本，而是返回 tool_calls，
+        此时 LLMResult.text 为空、LLMResult.tool_calls 非空，调用方据此走工具分支。
+        """
         headers = self._headers()
-        payload = self._payload(messages, temperature, max_tokens, stream=False)
+        payload = self._payload(messages, temperature, max_tokens, stream=False,
+                                tools=tools, tool_choice=tool_choice)
         last_error: Optional[str] = None
 
         for attempt in range(1, max(1, self._settings.llm_max_retries) + 1):
@@ -151,13 +176,22 @@ class LLMClient:
             raise LLMError(f"LLM 返回结构异常（缺少 choices）：{str(data)[:200]}")
         message = choices[0].get("message") or {}
         content = message.get("content")
-        if content is None:
+        tool_calls = message.get("tool_calls") or []
+
+        # 兼容两种正常情形：
+        #   ① 普通回答：有 content
+        #   ② 工具调用：content 可能为 null/空串，但 tool_calls 非空
+        # 只有两者都为空才算真正的异常（以前这里把情形 ② 误判为"返回内容为空"）
+        if (content is None or str(content).strip() == "") and not tool_calls:
             raise LLMError(f"LLM 返回内容为空：{str(choices[0])[:200]}")
+
         return LLMResult(
-            text=str(content).strip(),
+            text=str(content).strip() if content is not None else "",
             model=str(data.get("model", "")),
             usage=dict(data.get("usage") or {}),
             finish_reason=str(choices[0].get("finish_reason", "")),
+            tool_calls=[dict(item) for item in tool_calls if isinstance(item, dict)],
+            raw_message=dict(message),
         )
 
     # ------------------------------------------------------------------ #

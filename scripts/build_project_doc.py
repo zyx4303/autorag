@@ -384,7 +384,8 @@ def build_html(stats: Stats) -> str:
     <li>缺陷排查记录：4 个真实问题的定位与修复过程 <span class="pg">P9</span></li>
     <li>运行效果：真实问答与拒答截图 <span class="pg">P13</span></li>
     <li>工程实践：可复现、可观测、可交付 <span class="pg">P14</span></li>
-    <li>已知局限与下一步计划 <span class="pg">P15</span></li>
+    <li>两个扩展模块：FreshGuard 与 LangGraph Agent <span class="pg">P14</span></li>
+    <li>已知局限与下一步计划 <span class="pg">P18</span></li>
   </ol>
   <div class="rule"></div>
   <h3>这份文档想回答什么</h3>
@@ -392,6 +393,7 @@ def build_html(stats: Stats) -> str:
     <li><b>它解决什么问题</b>——汽车售后知识分散在手册、码表、法规里，人工查找慢且容易出错。</li>
     <li><b>技术上难在哪</b>——结构化内容（表格、故障码）的切分、中文单字分词噪声、多部分提问的召回、以及"不许编造"的可验证机制。</li>
     <li><b>我是怎么做的</b>——每个技术决策背后的失败样例与验证数据。</li>
+    <li><b>怎么扩展的</b>——在固定流水线之上如何演进为 Agent，以及升级过程中踩到的三个实现坑。</li>
     <li><b>边界在哪</b>——哪些做不到、为什么继续调参没有意义。</li>
   </ul>
 </section>
@@ -833,11 +835,141 @@ def build_html(stats: Stats) -> str:
   </ul>
 </section>
 
-<!-- ================= 8 局限与计划 ================= -->
+<!-- ================= 8 两个扩展模块 ================= -->
 <section class="chapter">
-  <h2>8. 已知局限与下一步计划</h2>
+  <h2>8. 两个扩展模块：FreshGuard 与 LangGraph Agent</h2>
+  <p class="lead">
+    第 1–7 节描述的是固定流水线：问题进来 → 检索 → 生成。项目在此之上做了两次扩展，
+    分别解决"答案还有没有效"与"流程该不该由模型自己决定"两个问题。
+  </p>
 
-  <h3>8.1 检索层面还没解决的失败样例</h3>
+  <h3>8.1 FreshGuard：文档变更影响分析</h3>
+  <p>
+    RAG 只能回答"语义最相近的是哪一块"，回答不了另一个关键问题：
+    <b>这份文档改了之后，以前答过的内容里哪几句已经失效了？</b>
+    FreshGuard 在片段之上再加一层「原子化声明」（主体｜属性｜值｜限定条件 ＋ 原文证据），
+    让"答案是否还有效"变成一次结构化比对。
+  </p>
+  <table>
+    <tr><th style="width:26%">环节</th><th>做法</th></tr>
+    <tr><td>声明抽取</td><td>用 LLM 把散文抽成原子化声明，并要求给出原文证据；服务端强制校验证据必须是片段原文的连续子串，不通过就丢弃</td></tr>
+    <tr><td>增量抽取</td><td>按片段内容哈希判断：内容没变就复用历史声明，不重复调 LLM</td></tr>
+    <tr><td>版本管理</td><td>SQLite 按 <code>doc_version</code> 归档声明快照，永久保留历史（向量库只存当前状态，做不了版本对比）</td></tr>
+    <tr><td>差分分级</td><td>值修改 / 限定条件变化 / 仅需复核 三级，按严重度排序输出失效清单</td></tr>
+    <tr><td>影响面反查</td><td>按关键词反查同一事实在库内的全部引用，解决人工审核"改一处、漏三处"</td></tr>
+  </table>
+  <p class="small">
+    <b>本机实测：</b>6 份文档 87 个片段 → 763 条声明，81 次 LLM 调用；
+    改动保养周期 2 行后只重抽 1 个片段（1 次 LLM 调用、复用 6 片），
+    调用量降至全量重抽的 1/7；反查「机油」命中保养周期表 3 条 ＋ 故障码表 P0195/P0520/P0521。
+  </p>
+  <p class="small muted">
+    <b>踩过的坑（实录）：</b>大模型抽取粒度不稳定，会把"值没变的声明"报成修改、
+    把"原文还在的声明"报成删除。<b>修复</b>：前者单独归为 <code>qualifier_changed</code> 并降级为中等严重度；
+    后者加一层证据复核——若被删除的声明其证据仍能在当前正文中找到，就降级为 <code>recheck</code> 并标注原因。
+    这两步让审核清单只保留真实变更。
+  </p>
+</section>
+
+<section class="chapter">
+  <h3>8.2 LangGraph Agent：让模型自己决定调哪些工具</h3>
+  <p>
+    固定流水线的问题在于流程写死了，不管问题难易都走同一条路。
+    这里用 <b>显式 StateGraph</b>（不用 LangChain 的链式抽象）把它升级为 Agent：
+    由大模型在循环里自主决定调哪个工具、调几次、是否需要先追问用户。
+  </p>
+  <div class="arch">
+    <div class="lane">
+      <div class="lane-title">状态图（三节点 + 一条条件边）</div>
+      <div class="flow">
+        <div class="node"><b>START</b><span>用户消息</span></div>
+        <div class="arrow">→</div>
+        <div class="node hot"><b>agent</b><span>调 LLM，决定「调工具」还是「直接回答」</span></div>
+        <div class="arrow">→</div>
+        <div class="node hot"><b>tools</b><span>执行工具，结果写回 messages，回到 agent</span></div>
+        <div class="arrow">→</div>
+        <div class="node"><b>finalize</b><span>收尾：答案 / 追问 / 上限 / 报错</span></div>
+      </div>
+    </div>
+    <div class="lane">
+      <div class="lane-title">三道停止条件（满足任一即收尾）</div>
+      <div class="flow">
+        <div class="node"><b>模型不再请求工具</b><span>直接输出最终答案</span></div>
+        <div class="node"><b>迭代达到 6 次</b><span>强制收尾并附已获得的结果摘要</span></div>
+        <div class="node"><b>调用 ask_user</b><span>交回用户；checkpoint 保留上下文，补充后继续</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h3>8.3 四个工具（描述里写清适用与边界）</h3>
+  <table>
+    <tr><th style="width:20%">工具</th><th style="width:30%">作用</th><th>边界（写进了 JSON schema）</th></tr>
+    <tr><td><code>search_kb</code></td><td>知识库混合检索，返回带来源的原文片段</td><td>直接复用现有检索链路；检索为空必须如实说未找到，禁止编造库里没有的参数</td></tr>
+    <tr><td><code>lookup_dtc</code></td><td>故障码精确查询 / 按症状词模糊搜索</td><td>未命中时提示改用 keyword 或 search_kb；不要把范围码当具体码解释</td></tr>
+    <tr><td><code>compute_maintenance</code></td><td>按里程与车型算现在该做哪些保养</td><td>缺车型或里程必须调 ask_user；车型不支持时如实告知，禁止套用其它车型</td></tr>
+    <tr><td><code>ask_user</code></td><td>追问缺失信息（虚拟工具，无副作用）</td><td>信息已足够时禁止调用；一次最多 3 个问题</td></tr>
+  </table>
+  <p class="small">
+    <b>业务数据来源：</b>从仓库自带的示例码表与保养周期表<b>机械解析</b>建 SQLite
+    （251 个故障码 + 9 项保养，<b>不经 LLM 抽取</b>），因此建库结果可重复、可测试；
+    接真实车型数据时只需替换数据源，上层工具与状态图不用改。
+  </p>
+</section>
+
+<section class="chapter">
+  <h3>8.4 Agent 实测行为（真实调用，非脚本模拟）</h3>
+  <table>
+    <tr><th style="width:40%">提问</th><th style="width:30%">实际工具序列</th><th>结果</th></tr>
+    <tr><td>P0195 故障码什么意思</td><td><code>lookup_dtc → search_kb</code></td><td>引用 6 条；库中没有检修步骤时如实说明</td></tr>
+    <tr><td>P0300 故障码什么意思？</td><td><code>lookup_dtc → search_kb</code></td><td>引用 7 条</td></tr>
+    <tr><td>虚构车型A多久换一次机油？</td><td><code>search_kb</code></td><td>引用 5 条，结论带 <code>[n]</code> 角标</td></tr>
+    <tr><td>我该保养了吗</td><td><code>ask_user</code></td><td>追问车型 / 里程 / 使用月数，<code>stop_reason=ask_user</code></td></tr>
+    <tr><td>补齐信息后（同 session）</td><td><code>compute_maintenance</code></td><td>得出 5 项到期保养，并标注数据为示例</td></tr>
+    <tr><td>16000 公里该做什么保养？机油有什么注意事项？</td><td><code>compute_maintenance → search_kb</code></td><td>引用 6 条</td></tr>
+  </table>
+
+  <h3>8.5 升级过程中修复的三个实现缺陷</h3>
+  <table>
+    <tr><th style="width:30%">缺陷</th><th style="width:30%">报错现象</th><th>根因与修复</th></tr>
+    <tr>
+      <td>同步 Saver 与异步图不兼容</td>
+      <td><code>NotImplementedError: The SqliteSaver does not support async methods</code></td>
+      <td>异步图必须用 <code>AsyncSqliteSaver</code>（并装 aiosqlite），且其初始化本身是异步的，
+        只能在第一次请求的事件循环里延迟建好并缓存</td>
+    </tr>
+    <tr>
+      <td><code>tool_call_id</code> 丢失</td>
+      <td>DeepSeek 返回 <code>messages[3]: missing field 'tool_call_id'</code></td>
+      <td><code>add_messages</code> 会把普通 dict 自动转成 LangChain 的 <code>AIMessage</code> /
+        <code>ToolMessage</code>；转回 OpenAI 格式时必须补回 <code>tool_call_id</code>，
+        并把工具调用从 <code>{{name,args}}</code> 转成 <code>function</code> 结构</td>
+    </tr>
+    <tr>
+      <td>节点 <code>yield</code> 的事件被丢弃</td>
+      <td>SSE 只收到 node 事件，<code>tool_start</code> 全部丢失</td>
+      <td>LangGraph 把节点产出当作状态增量，非状态字段直接忽略；
+        正确做法是 <code>StreamWriter</code> + <code>stream_mode=["updates","custom"]</code></td>
+    </tr>
+  </table>
+
+  <p class="small muted">
+    <b>尚未解决的局限：</b>知识型问题上模型有时会在同一轮并行发起 2 次 <code>search_kb</code>
+    （换近义词重复检索）。已在系统提示词中加入「收敛原则」明确禁止，但实测仍会出现——
+    说明<b>提示词对工具调用次数的约束力有限</b>，更可靠的做法是在图层面限制同名工具的调用次数。
+    这条作为下一步计划列出，而不是假装已经解决。
+  </p>
+  <p class="small">
+    <b>测试规模：</b>原有 <code>tests/smoke_test.py</code> 68 项（含 Agent 工具 schema 不变量）、
+    新增 <code>tests/agent_smoke_test.py</code> 79 项（脚本化 LLM，确定性覆盖工具链、追问、
+    迭代上限、工具报错换策略、JSON 容错），全部通过。
+  </p>
+</section>
+
+<!-- ================= 9 局限与计划 ================= -->
+<section class="chapter">
+  <h2>9. 已知局限与下一步计划</h2>
+
+  <h3>9.1 检索层面还没解决的失败样例</h3>
   <table>
     <tr><th style="width:32%">查询</th><th style="width:30%">第 1 名实际召回</th><th>原因</th></tr>
     <tr>
@@ -860,7 +992,7 @@ def build_html(stats: Stats) -> str:
     "车辆失火"这类问题在生成侧已经能答对（正确答案就在前 3）。
   </p>
 
-  <h3>8.2 能力边界</h3>
+  <h3>9.2 能力边界</h3>
   <table>
     <tr><th style="width:30%">维度</th><th>现状</th></tr>
     <tr><td>引用校验</td><td>只做到<b>编号级</b>（角标不越界、与实际召回一一对应）；<b>做不到语义级</b>——无法判断"这句话是否真被该片段支持"，需要 NLI 模型或 LLM-as-judge</td></tr>
@@ -871,7 +1003,7 @@ def build_html(stats: Stats) -> str:
     <tr><td>评测集</td><td>20 条模板已备，<code>ground_truth</code> 需按真实资料补齐后才有可对外的效果口径</td></tr>
   </table>
 
-  <h3>8.3 下一步计划（按性价比排序）</h3>
+  <h3>9.3 下一步计划（按性价比排序）</h3>
   <ol>
     <li><b>接入 rerank 模型</b>（如 bge-reranker）替换启发式重排 —— 直接针对 8.1 的两个失败样例；</li>
     <li><b>多轮对话</b>：按 <code>session_id</code> 维护历史，并对历史问题做查询改写；</li>

@@ -266,6 +266,61 @@ def test_hash_embedder() -> None:
     asyncio.run(run())
 
 
+def test_guard_claims() -> None:
+    print("\n[7] FreshGuard 声明模型（归一化 / 变更判定 / 严重度）")
+    from app.guard.claims import Claim, classify_change, normalize_value, severity_of
+    from app.guard.extractor import ClaimExtractor, plan_incremental
+
+    # 归一化：带千分位、带单位、时间单位都要能统一
+    check("里程归一化", normalize_value("每 8,000 km") == "8000km", str(normalize_value("每 8,000 km")))
+    check("月份归一化", normalize_value("每 8 个月") == "8month", str(normalize_value("每 8 个月")))
+    check("年归一化", normalize_value("每 2 年") == "2year", str(normalize_value("每 2 年")))
+    check("无单位文本返回 None", normalize_value("建议缩短更换间隔") is None)
+
+    def build(value: str, qualifiers=None) -> Claim:
+        return Claim(
+            claim_key="k", claim_type="interval", subject="更换发动机机油",
+            predicate="周期", value=value, qualifiers=qualifiers or [],
+        )
+
+    # 变更判定：三种情况必须区分开
+    check("值未变判 unchanged", classify_change(build("每 8,000 km"), build("每 8000km")) == "unchanged")
+    check(
+        "值变化判 modified",
+        classify_change(build("每 8,000 km"), build("每 10,000 km")) == "modified",
+    )
+    check(
+        "仅限定条件变化单独分类",
+        classify_change(build("每 8,000 km", ["首次"]), build("每 8,000 km")) == "qualifier_changed",
+    )
+    check("新增判 added", classify_change(None, build("每 8,000 km")) == "added")
+    check("删除判 removed", classify_change(build("每 8,000 km"), None) == "removed")
+
+    # 严重度：数值型修改必须是 high，限定条件变化不能升到 high
+    check("周期修改为高严重度", severity_of("modified", "interval") == "high")
+    check("限定条件变化为中严重度", severity_of("qualifier_changed", "interval") == "medium")
+    check("新增为低严重度", severity_of("added", "interval") == "low")
+
+    # claim_key 稳定性：同文档同类型同主体同属性必须得到同一个 key
+    key1 = Claim.build_key("a.md", "interval", "更换发动机机油", "周期")
+    key2 = Claim.build_key("a.md", "interval", "更换发动机机油", "周期")
+    key3 = Claim.build_key("b.md", "interval", "更换发动机机油", "周期")
+    check("claim_key 同输入同结果", key1 == key2)
+    check("claim_key 跨文档不冲突", key1 != key3)
+
+    # 增量规划：内容哈希相同的片段应被复用
+    class FakeChunk:
+        def __init__(self, cid, text):
+            self.chunk_id = cid
+            self.text = text
+
+    chunks = [FakeChunk("c1", "更换机油 每 8000 km"), FakeChunk("c2", "更换火花塞 每 64000 km")]
+    hashes = {"c1": ClaimExtractor.chunk_content_hash("更换机油 每 8000 km")}
+    to_extract, reusable = plan_incremental(chunks, hashes)
+    check("未变更片段被复用", [c.chunk_id for c in reusable] == ["c1"], str([c.chunk_id for c in reusable]))
+    check("变更片段需重抽", [c.chunk_id for c in to_extract] == ["c2"], str([c.chunk_id for c in to_extract]))
+
+
 def main() -> int:
     print("=" * 68)
     print("AutoRAG 冒烟测试（纯逻辑，不联网、不需要 API Key、不调用大模型）")
@@ -279,6 +334,7 @@ def main() -> int:
     test_fusion()
     test_citations()
     test_hash_embedder()
+    test_guard_claims()
 
     print("\n" + "=" * 68)
     print(f"结果：通过 {PASSED} 项，失败 {FAILED} 项")

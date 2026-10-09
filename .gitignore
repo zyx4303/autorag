@@ -30,6 +30,8 @@ data/uploads/
 data/_quarantine/
 data/registry.json
 data/bm25_index.json
+data/claims.db
+data/claims.db-journal
 data/preflight_report.txt
 eval/results/
 
@@ -50,3 +52,7 @@ resume/
 .DS_Store
 Thumbs.db
 *.log
+
+# 简历编译工作目录与个人脚本（仅本地使用）
+_resume2/
+*.bat

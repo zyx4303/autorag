@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 
@@ -35,6 +35,9 @@ class ServiceContainer:
     ingestion: Optional[IngestionService] = None
     qa: Optional[QAEngine] = None
     evaluation: Optional[EvaluationService] = None
+    # FreshGuard：知识库变更影响分析（声明库 + 差分服务）
+    claim_store: Optional[Any] = None
+    drift: Optional[Any] = None
     init_errors: List[str] = field(default_factory=list)
 
     @property

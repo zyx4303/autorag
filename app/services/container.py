@@ -52,6 +52,20 @@ def build_container(settings: Settings) -> ServiceContainer:
     # ---- BM25 ----
     container.bm25 = BM25Index(persist_path=settings.bm25_index_path)
 
+    # ---- FreshGuard：声明库与变更影响分析 ----
+    # 只依赖 LLM 客户端与切分器，不依赖向量库；
+    # 因此即使向量库初始化失败，变更分析功能仍然可用。
+    try:
+        from app.guard.service import DriftService
+        from app.guard.store import ClaimStore
+
+        container.claim_store = ClaimStore(settings.guard_db_path)
+        container.drift = DriftService(settings, container.llm, container.claim_store)
+    except Exception as exc:
+        message = f"变更分析模块初始化失败：{exc}"
+        logger.error(message)
+        container.init_errors.append(message)
+
     # ---- 检索器 / 入库 / 问答 ----
     if container.vector_store is not None:
         container.retriever = HybridRetriever(settings, container.vector_store, container.bm25)

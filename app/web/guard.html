@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FreshGuard · 知识库变更影响审计面板</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
+    --text:#e6e8ee; --muted:#9aa3b2; --brand:#4f8cff;
+    --high:#e05c5c; --mid:#e0a23c; --low:#3fbf7f;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font:14px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  header { padding:16px 22px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  header h1 { font-size:17px; margin:0; }
+  header .sub { color:var(--muted); font-size:12px; }
+  main { max-width:1120px; margin:0 auto; padding:18px 22px 60px; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:16px; }
+  section h2 { font-size:14px; margin:0 0 10px; color:var(--muted); font-weight:600; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+  button { background:var(--brand); color:#fff; border:0; border-radius:8px; padding:9px 16px; font:inherit; cursor:pointer; }
+  button.ghost { background:var(--panel2); border:1px solid var(--line); color:var(--text); }
+  button:disabled { opacity:.55; cursor:not-allowed; }
+  input[type="text"] { background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    border-radius:8px; padding:9px 10px; font:inherit; min-width:220px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
+  .card { background:var(--panel2); border:1px solid var(--line); border-radius:9px; padding:11px 13px; }
+  .card b { display:block; font-size:22px; line-height:1.15; }
+  .card span { font-size:12px; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-size:13px; margin-top:8px; }
+  th,td { border-bottom:1px solid var(--line); padding:7px 9px; text-align:left; vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:12px; }
+  .sev { display:inline-block; padding:1px 8px; border-radius:999px; font-size:11.5px; }
+  .sev.high { background:rgba(224,92,92,.16); color:var(--high); }
+  .sev.medium { background:rgba(224,162,60,.16); color:var(--mid); }
+  .sev.low { background:rgba(63,191,127,.16); color:var(--low); }
+  .sev.recheck { background:rgba(150,150,190,.18); color:#a9b0d8; }
+  .chg { font-size:11.5px; color:var(--muted); }
+  .old { color:#e08585; text-decoration:line-through; }
+  .new { color:#8ee0a8; }
+  pre { background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:12px;
+    overflow:auto; max-height:420px; white-space:pre-wrap; word-break:break-word;
+    font:12px/1.6 "Cascadia Mono",Consolas,monospace; margin:10px 0 0; }
+  .status { margin-left:auto; font-size:12px; color:var(--muted); }
+  .empty { color:var(--muted); font-size:13px; }
+  .tag { font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:0 7px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>FreshGuard · 知识库变更影响审计</h1>
+  <span class="sub">文档改动 → 结论变更清单：哪些答案已经失效，需要重新确认</span>
+  <span class="status" id="status">就绪</span>
+</header>
+
+<main>
+  <section>
+    <h2>1. 声明库概况</h2>
+    <div class="cards" id="cards">
+      <div class="card"><b id="cDocs">-</b><span>已抽取文档</span></div>
+      <div class="card"><b id="cVersions">-</b><span>版本快照</span></div>
+      <div class="card"><b id="cClaims">-</b><span>声明总数</span></div>
+      <div class="card"><b id="cHigh">-</b><span>高严重度变更</span></div>
+    </div>
+    <div class="row">
+      <button id="btnScan">扫描知识库并增量抽取</button>
+      <button id="btnForce" class="ghost">全量重抽（force）</button>
+      <button id="btnDiffAll" class="ghost">汇总所有变更</button>
+      <button id="btnStats" class="ghost">刷新统计</button>
+    </div>
+    <pre id="out">点击上方按钮开始。抽取第一次会对全部片段调用大模型；之后只对改动过的片段调用。</pre>
+  </section>
+
+  <section>
+    <h2>2. 变更清单（按严重度排序）</h2>
+    <div class="row">
+      <input type="text" id="srcInput" placeholder="文档相对路径，留空=所有文档" />
+      <button id="btnDiff">查看该文档的变更</button>
+    </div>
+    <div id="diffBox"><p class="empty">尚未查询。</p></div>
+  </section>
+
+  <section>
+    <h2>3. 影响面反查：这句话要是变了，谁会受影响</h2>
+    <div class="row">
+      <input type="text" id="kwInput" placeholder="如 机油 / 火花塞 / 包修期" />
+      <button id="btnAffects">反查相关声明</button>
+    </div>
+    <div id="affectBox"><p class="empty">尚未查询。</p></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const API = '/api/v1/guard';
+const out = $('out');
+
+function setStatus(text) { $('status').textContent = text; }
+function print(data) { out.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2); }
+
+async function call(method, path, body) {
+  const options = { method, headers: {} };
+  if (body !== undefined) {
+    options.headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, options);
+  const text = await res.text();
+  let data; try { data = JSON.parse(text); } catch (e) { data = text; }
+  if (!res.ok) throw new Error('HTTP ' + res.status + '：' + (data && data.detail ? data.detail : text));
+  return data;
+}
+
+async function guard(btn, fn) {
+  btn.disabled = true; setStatus('请求中…');
+  try { await fn(); }
+  catch (e) { setStatus('失败'); print(String(e.message || e)); }
+  finally { btn.disabled = false; }
+}
+
+async function refreshStats() {
+  const data = await call('GET', API + '/stats');
+  $('cDocs').textContent = data.store.documents;
+  $('cVersions').textContent = data.store.versions;
+  $('cClaims').textContent = data.store.claims_total;
+  return data;
+}
+
+function sevBadge(sev) { return '<span class="sev ' + sev + '">' + sev + '</span>'; }
+
+function renderDiff(data) {
+  const box = $('diffBox');
+  if (data.status === 'insufficient_versions') {
+    box.innerHTML = '<p class="empty">' + data.message + '</p>';
+    return;
+  }
+  const s = data.summary;
+  let html = '<div class="row"><span class="tag">旧版本 #' + data.old_version.id + '（' +
+    data.old_version.claim_count + ' 条声明）</span><span class="tag">新版本 #' + data.new_version.id +
+    '（' + data.new_version.claim_count + ' 条）</span><span class="tag">值修改 ' + s.modified +
+    ' · 删除 ' + s.removed + ' · 新增 ' + s.added + ' · 限定条件变化 ' + (s.qualifier_changed || 0) +
+    ' · 未变 ' + s.unchanged + '</span></div>';
+  if (!data.changes.length) {
+    box.innerHTML = html + '<p class="empty">该文档两个版本之间没有实质变更。</p>';
+    return;
+  }
+  html += '<table><thead><tr><th>严重度</th><th>变更</th><th>主体 / 属性</th><th>旧值 → 新值</th></tr></thead><tbody>';
+  data.changes.forEach(function (c) {
+    const oldV = c.old_value ? '<span class="old">' + c.old_value + '</span>' : '<span class="chg">（无）</span>';
+    const newV = c.new_value ? '<span class="new">' + c.new_value + '</span>' : '<span class="chg">（已删除）</span>';
+    const label = c.change === 'qualifier_changed' ? '仅限定条件变化' : c.change;
+    html += '<tr><td>' + sevBadge(c.severity) + '</td><td class="chg">' + label +
+      '<br/>' + c.claim_type + '</td><td>' + c.subject + ' · ' + c.predicate +
+      '</td><td>' + oldV + '<br/>' + newV + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  box.innerHTML = html;
+}
+
+function renderAffects(data) {
+  const box = $('affectBox');
+  if (!data.matched_claims) {
+    box.innerHTML = '<p class="empty">没有匹配的声明。</p>';
+    return;
+  }
+  let html = '<div class="row"><span class="tag">命中 ' + data.matched_claims + ' 条声明</span>';
+  Object.keys(data.affected_documents).forEach(function (doc) {
+    html += '<span class="tag">' + doc + ' × ' + data.affected_documents[doc] + '</span>';
+  });
+  html += '</div><table><thead><tr><th>文档</th><th>主体</th><th>值</th><th>限定条件</th></tr></thead><tbody>';
+  data.claims.forEach(function (c) {
+    html += '<tr><td>' + c.doc_source + '<br/><span class="chg">' + (c.section || '') + '</span></td><td>' +
+      c.subject + '</td><td>' + c.value + '</td><td class="chg">' +
+      ((c.qualifiers || []).join('；') || '—') + '</td></tr>';
+  });
+  box.innerHTML = html + '</tbody></table>';
+}
+
+$('btnScan').onclick = (e) => guard(e.target, async () => {
+  const data = await call('POST', API + '/scan');
+  print(data);
+  await refreshStats();
+  setStatus('扫描完成：' + data.scanned + ' 份文档，' + data.duration_ms + 'ms');
+});
+
+$('btnForce').onclick = (e) => guard(e.target, async () => {
+  if (!confirm('全量重抽会对所有片段调用大模型，确认继续？')) return;
+  const data = await call('POST', API + '/scan?force=true');
+  print(data);
+  await refreshStats();
+  setStatus('全量重抽完成');
+});
+
+$('btnDiffAll').onclick = (e) => guard(e.target, async () => {
+  const data = await call('GET', API + '/diff/all');
+  print(data);
+  $('cHigh').textContent = data.high_severity_count;
+  setStatus('对比 ' + data.documents_compared + ' 份文档，高严重度变更 ' + data.high_severity_count + ' 条');
+});
+
+$('btnStats').onclick = (e) => guard(e.target, async () => {
+  const data = await refreshStats();
+  print(data);
+  setStatus('已刷新');
+});
+
+$('btnDiff').onclick = (e) => guard(e.target, async () => {
+  const source = $('srcInput').value.trim();
+  const path = source ? API + '/diff?source=' + encodeURIComponent(source) : API + '/diff/all';
+  const data = await call('GET', path);
+  print(data);
+  if (data.per_document) {
+    renderDiff(data.per_document[0] || { status: 'insufficient_versions', message: '没有可比对的文档（每个文档至少要有两个版本）' });
+    setStatus('汇总完成');
+  } else {
+    renderDiff(data);
+    setStatus('已完成');
+  }
+});
+
+$('btnAffects').onclick = (e) => guard(e.target, async () => {
+  const kw = $('kwInput').value.trim();
+  if (!kw) { setStatus('请输入关键词'); return; }
+  const data = await call('GET', API + '/affects?keyword=' + encodeURIComponent(kw));
+  print(data);
+  renderAffects(data);
+  setStatus('命中 ' + data.matched_claims + ' 条');
+});
+
+// 打开面板时自动刷新一次统计
+refreshStats().catch(function (err) { print(String(err.message || err)); });
+</script>
+</body>
+</html>

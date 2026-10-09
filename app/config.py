@@ -143,6 +143,9 @@ class Settings(BaseModel):
     chroma_collection: str = Field(
         default_factory=lambda: _env_str("CHROMA_COLLECTION", "auto_after_sales")
     )
+    guard_db_path_raw: str = Field(
+        default_factory=lambda: _env_str("GUARD_DB_PATH", "./data/claims.db")
+    )
 
     # ---- 切分 ----
     chunk_size: int = Field(default_factory=lambda: _env_int("CHUNK_SIZE", 600))
@@ -189,6 +192,11 @@ class Settings(BaseModel):
     @property
     def bm25_index_path(self) -> Path:
         return _resolve_path(self.bm25_index_path_raw, "./data/bm25_index.json")
+
+    @property
+    def guard_db_path(self) -> Path:
+        """FreshGuard 声明库（SQLite）路径。"""
+        return _resolve_path(self.guard_db_path_raw, "./data/claims.db")
 
     @property
     def chunk_overlap_effective(self) -> int:
@@ -260,6 +268,7 @@ class Settings(BaseModel):
             self.upload_dir,
             self.registry_path.parent,
             self.bm25_index_path.parent,
+            self.guard_db_path.parent,
         ):
             path.mkdir(parents=True, exist_ok=True)
 

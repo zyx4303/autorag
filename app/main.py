@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.api import routes_eval, routes_ingest, routes_qa, routes_system
+from app.api import routes_eval, routes_guard, routes_ingest, routes_qa, routes_system
 from app.api.deps import ServiceContainer, get_container, verify_api_key
 from app.config import PROJECT_ROOT, get_settings
 from app.logging_conf import get_logger, setup_logging
@@ -90,6 +90,7 @@ app.include_router(routes_system.router, prefix=api_prefix)
 app.include_router(routes_ingest.router, prefix=api_prefix)
 app.include_router(routes_qa.router, prefix=api_prefix)
 app.include_router(routes_eval.router, prefix=api_prefix)
+app.include_router(routes_guard.router, prefix=api_prefix)
 
 
 @app.exception_handler(Exception)
@@ -112,6 +113,17 @@ async def console() -> FileResponse:
     if not CONSOLE_HTML.exists():  # pragma: no cover
         raise HTTPException(status_code=404, detail="console.html 缺失")
     return FileResponse(str(CONSOLE_HTML), media_type="text/html")
+
+
+GUARD_HTML = PROJECT_ROOT / "app" / "web" / "guard.html"
+
+
+@app.get("/guard", include_in_schema=False)
+async def guard_panel() -> FileResponse:
+    """FreshGuard 变更影响审计面板。"""
+    if not GUARD_HTML.exists():  # pragma: no cover
+        raise HTTPException(status_code=404, detail="guard.html 缺失")
+    return FileResponse(str(GUARD_HTML), media_type="text/html")
 
 
 @app.get(f"{api_prefix}/ask", tags=["qa"], summary="GET 版问答（便于浏览器/curl 直接试）")

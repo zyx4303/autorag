@@ -1,207 +1,270 @@
 {
   "name": "auto_aftersales_eval",
-  "version": "1.0",
-  "description": "AutoRAG 汽车售后知识库问答系统 · 20 条评测集模板。所有涉及具体数值/条款/故障码的答案位置都用 [待补充] 标注，需要你依据真实资料填写。expected_sources 请填 data/documents 下的相对路径；expected_keywords 用于规则打分，请填答案中必须出现的字面串（如具体数值、部件名、故障码）。must_refuse=true 的条目用于检验系统是否会拒答无依据问题。",
+  "version": "1.1",
+  "description": "AutoRAG 汽车售后知识库问答系统 · 20 条评测集（已按 data/documents 实际语料补齐 ground_truth / expected_sources / expected_keywords；must_refuse=true 的条目是语料库确实无法回答、正确行为应为拒答的负样本）。",
   "items": [
     {
       "id": "Q001",
       "category": "保养",
       "question": "首保应该在多少公里或多长时间内进行？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
+      "ground_truth": "示例车型 A：第 1 次保养节点为 16（×1,000 km）或 12 个月，以先到者为准。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_keywords": [
+        "16,000",
+        "12 个月"
+      ],
       "must_refuse": false,
-      "notes": "检验系统能否召回保养周期表并原样保留数值；答案里必须出现具体间隔。"
+      "notes": "示例车型 A：第 1 次保养节点为 16（×1,000 km）或 12 个月，以先到者为准。"
     },
     {
       "id": "Q002",
       "category": "保养",
       "question": "常规保养的周期是多久一次？包含哪些项目？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
+      "ground_truth": "更换发动机机油/机油滤清器：每 8,000 km 或 8 个月；空气滤清器滤芯、空调滤芯：每 16,000 km。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_keywords": [
+        "8,000",
+        "8 个月",
+        "16,000"
+      ],
       "must_refuse": false,
-      "notes": "多项目答案，检验引用是否覆盖多个片段。"
+      "notes": "更换发动机机油/机油滤清器：每 8,000 km 或 8 个月；空气滤清器滤芯、空调滤芯：每 16,000 km。"
     },
     {
       "id": "Q003",
       "category": "油液",
       "question": "我的车应该使用什么标号的机油？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
-      "must_refuse": false,
-      "notes": "检验黏度等级这类精确串是否被正确引用，不要被模型改写成同义表述。"
+      "ground_truth": "语料库中没有任何文件包含机油黏度标号信息，正确行为是拒答。",
+      "expected_sources": [],
+      "expected_keywords": [],
+      "must_refuse": true,
+      "notes": "语料库中没有任何文件包含机油黏度标号信息，正确行为是拒答。"
     },
     {
       "id": "Q004",
       "category": "油液",
       "question": "更换机油时需要同时更换机油滤清器吗？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
+      "ground_truth": "示例车型 A 的常规保养周期表中，更换发动机机油滤清器的周期与发动机机油一致。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_keywords": [
+        "机油滤清器"
+      ],
       "must_refuse": false,
-      "notes": "是非型问题，检验答案是否给出明确结论 + 依据。"
+      "notes": "示例车型 A 的常规保养周期表中，更换发动机机油滤清器的周期与发动机机油一致。"
     },
     {
       "id": "Q005",
       "category": "易损件",
       "question": "空气滤芯和空调滤芯多久更换一次？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
+      "ground_truth": "空气滤清器滤芯每 16,000 km；空调滤芯每 16,000 km 或每 12 个月。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_keywords": [
+        "16,000"
+      ],
       "must_refuse": false,
-      "notes": "两个部件两个周期，检验答案结构是否清晰、引用是否可追溯。"
+      "notes": "空气滤清器滤芯每 16,000 km；空调滤芯每 16,000 km 或每 12 个月。"
     },
     {
       "id": "Q006",
       "category": "易损件",
       "question": "刹车片的更换标准是什么？磨损到多少毫米需要更换？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
-      "must_refuse": false,
-      "notes": "含阈值数值，检验是否出现具体毫米数而不是模糊表述。"
+      "ground_truth": "语料库只有「检查前后制动器 每 10,000 km 或每 1 年」的周期，没有毫米级磨损阈值，正确行为是拒答。",
+      "expected_sources": [],
+      "expected_keywords": [],
+      "must_refuse": true,
+      "notes": "语料库只有「检查前后制动器 每 10,000 km 或每 1 年」的周期，没有毫米级磨损阈值，正确行为是拒答。"
     },
     {
       "id": "Q007",
       "category": "油液",
       "question": "刹车油需要定期更换吗？更换周期是多少？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
+      "ground_truth": "示例车型 A：更换制动液 每 2 年。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_keywords": [
+        "2 年"
+      ],
       "must_refuse": false,
-      "notes": "检验周期类问题的召回与引用。"
+      "notes": "示例车型 A：更换制动液 每 2 年。"
     },
     {
       "id": "Q008",
       "category": "油液",
       "question": "冷却液（防冻液）液位低于下限，可以自己加水补充吗？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
-      "must_refuse": false,
-      "notes": "涉及操作风险，检验答案是否给出安全警示与「以手册为准」的限定。"
+      "ground_truth": "语料库只有冷却液更换周期，没有「液位不足能否自行加水」的操作指引，正确行为是拒答。",
+      "expected_sources": [],
+      "expected_keywords": [],
+      "must_refuse": true,
+      "notes": "语料库只有冷却液更换周期，没有「液位不足能否自行加水」的操作指引，正确行为是拒答。"
     },
     {
       "id": "Q009",
       "category": "保养",
       "question": "火花塞多久需要更换？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
+      "ground_truth": "示例车型 A：更换火花塞 每 64,000 km。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_keywords": [
+        "64,000"
+      ],
       "must_refuse": false,
-      "notes": "若资料按发动机型号区分周期，检验模型是否保留型号限定。"
+      "notes": "示例车型 A：更换火花塞 每 64,000 km。"
     },
     {
       "id": "Q010",
       "category": "故障码",
       "question": "仪表出现 P0420 故障码是什么意思？需要怎么处理？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
+      "ground_truth": "P0420 = 催化器净化效率低于阈值（第 1 排）；处理方向见示例车型 A 的故障码速查表。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md",
+        "故障码表：OBD-II标准码表中文对照（自编）.md"
+      ],
+      "expected_keywords": [
+        "催化器"
+      ],
       "must_refuse": false,
-      "notes": "关键词类问题的典型用例：BM25 通道应能命中故障码字面串。"
+      "notes": "P0420 = 催化器净化效率低于阈值（第 1 排）；处理方向见示例车型 A 的故障码速查表。"
     },
     {
       "id": "Q011",
       "category": "电气",
       "question": "车辆长期停放，蓄电池会亏电吗？应该如何维护？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
+      "ground_truth": "示例车型 A 定期保养项目表含「检查 12V 蓄电池电压 每 10,000 km 或每 1 年」。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_keywords": [
+        "蓄电池"
+      ],
       "must_refuse": false,
-      "notes": "开放型问题，检验答案是否控制在资料范围内、不额外编造参数。"
+      "notes": "示例车型 A 定期保养项目表含「检查 12V 蓄电池电压 每 10,000 km 或每 1 年」。"
     },
     {
       "id": "Q012",
       "category": "轮胎",
       "question": "胎压监测系统报警了，我该按什么标准检查胎压？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
+      "ground_truth": "示例车型 A 定期保养项目表含「检查胎压与胎面磨损 每月」。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_keywords": [
+        "胎压"
+      ],
       "must_refuse": false,
-      "notes": "检验能否召回标准胎压表，并保留车型/载荷等限定条件。"
+      "notes": "示例车型 A 定期保养项目表含「检查胎压与胎面磨损 每月」。"
     },
     {
       "id": "Q013",
       "category": "季节性",
       "question": "夏季用车有哪些需要注意的检查项？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
+      "ground_truth": "示例车型 A 恶劣条件保养说明：长期在 35℃ 以上高温环境行驶需缩短保养间隔。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_keywords": [
+        "35"
+      ],
       "must_refuse": false,
-      "notes": "清单型问题，检验答案条目与引用编号是否一一对应。"
+      "notes": "示例车型 A 恶劣条件保养说明：长期在 35℃ 以上高温环境行驶需缩短保养间隔。"
     },
     {
       "id": "Q014",
       "category": "季节性",
       "question": "冬季低温启动困难，官方建议的操作步骤是什么？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
-      "must_refuse": false,
-      "notes": "步骤型问题，检验答案是否为有序步骤且每步带来源。"
+      "ground_truth": "语料库只有「低于 0℃ 短途行驶建议缩短机油更换间隔」，没有任何低温启动操作步骤，正确行为是拒答。",
+      "expected_sources": [],
+      "expected_keywords": [],
+      "must_refuse": true,
+      "notes": "语料库只有「低于 0℃ 短途行驶建议缩短机油更换间隔」，没有任何低温启动操作步骤，正确行为是拒答。"
     },
     {
       "id": "Q015",
       "category": "使用",
       "question": "长途出行前需要做哪些检查？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
+      "ground_truth": "示例车型 A 定期保养项目表：检查前后制动器、检查传动轴防尘罩与悬架部件、检查制动软管与管路等。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_keywords": [
+        "制动",
+        "悬架"
+      ],
       "must_refuse": false,
-      "notes": "清单型问题，与 Q013 区分季节维度与出行维度。"
+      "notes": "示例车型 A 定期保养项目表：检查前后制动器、检查传动轴防尘罩与悬架部件、检查制动软管与管路等。"
     },
     {
       "id": "Q016",
       "category": "使用",
       "question": "空调不制冷可能是什么原因？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
+      "ground_truth": "示例车企 B 的 ATC 自动空调系统故障码含压缩机离合器回路短路、鼓风机电机断路、温度传感器异常等。",
+      "expected_sources": [
+        "故障码表：示例车企B-DTC总列表（虚构）.md"
+      ],
+      "expected_keywords": [
+        "空调压缩机"
+      ],
       "must_refuse": false,
-      "notes": "诊断型问题，检验答案是否只列资料中给出的可能原因，不自由发挥。"
+      "notes": "示例车企 B 的 ATC 自动空调系统故障码含压缩机离合器回路短路、鼓风机电机断路、温度传感器异常等。"
     },
     {
       "id": "Q017",
       "category": "故障诊断",
       "question": "仪表盘上的各种警示灯分别代表什么含义？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
-      "must_refuse": false,
-      "notes": "宽泛问题，可能召回多个片段，检验多引用 [1][2][3] 场景。"
+      "ground_truth": "语料库中没有警示灯（指示灯）含义表，正确行为是拒答。",
+      "expected_sources": [],
+      "expected_keywords": [],
+      "must_refuse": true,
+      "notes": "语料库中没有警示灯（指示灯）含义表，正确行为是拒答。"
     },
     {
       "id": "Q018",
       "category": "保修",
       "question": "整车质保期是多久？哪些情况不属于保修范围？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
+      "ground_truth": "包修期不得低于 3 年或 60,000 km（法规口径）；示例文档给的是 3 年或 100,000 km。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md",
+        "保修条款：汽车三包规定全文.md"
+      ],
+      "expected_keywords": [
+        "3 年"
+      ],
       "must_refuse": false,
-      "notes": "关键条款类问题，检验是否能召回免责条款原文并保留条件限定。"
+      "notes": "包修期不得低于 3 年或 60,000 km（法规口径）；示例文档给的是 3 年或 100,000 km。"
     },
     {
       "id": "Q019",
       "category": "保修",
       "question": "车辆故障需要索赔，具体流程是什么？需要准备哪些材料？",
-      "ground_truth": "[待补充]",
-      "expected_sources": ["[待补充]"],
-      "expected_keywords": ["[待补充]"],
+      "ground_truth": "索赔材料：购车发票、三包凭证、保养记录、故障描述与诊断报告。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md",
+        "保修条款：汽车三包规定全文.md"
+      ],
+      "expected_keywords": [
+        "三包凭证"
+      ],
       "must_refuse": false,
-      "notes": "流程型问题，检验步骤完整性与引用可追溯性。"
+      "notes": "索赔材料：购车发票、三包凭证、保养记录、故障描述与诊断报告。"
     },
     {
       "id": "Q020",
       "category": "负样本",
       "question": "请告诉我其他品牌同级车型的保养价格对比，以及 2027 款未上市车型的确切参数。",
-      "ground_truth": "知识库中没有其他品牌价格与未上市车型参数，应当明确拒答并给出确认渠道。",
+      "ground_truth": "知识库中不存在跨品牌价格与未上市车型参数，正确行为是拒答。",
       "expected_sources": [],
-      "expected_keywords": ["未找到", "无法"],
+      "expected_keywords": [],
       "must_refuse": true,
-      "notes": "负样本：检验系统在无依据时是否拒答，而不是编造价格与参数。"
+      "notes": "知识库中不存在跨品牌价格与未上市车型参数，正确行为是拒答。"
     }
   ]
 }

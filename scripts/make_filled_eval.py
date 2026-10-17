@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""生成已补齐真值的评测集 eval/eval_set.filled.json（依据 data/documents 实际语料）。"""
+"""按 data/documents 实际语料重新生成 eval/eval_set.json 的 ground_truth。
+
+语料改动后重跑一次，避免评测真值与知识库漂移。
+"""
 import io
 import json
 
@@ -76,7 +79,7 @@ def main() -> None:
             for (i, c, q, s, k, r, gt) in ITEMS
         ],
     }
-    with io.open("eval/eval_set.filled.json", "w", encoding="utf-8") as f:
+    with io.open("eval/eval_set.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
     print("written items:", len(out["items"]))
     print("refuse items:", sum(1 for x in out["items"] if x["must_refuse"]))

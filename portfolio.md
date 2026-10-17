@@ -92,7 +92,7 @@ AutoRAG/                        # 公开仓库
 │   ├── ingest.py               # 入库脚本（可公开）
 │   ├── run_eval.py             # 评测脚本（可公开）
 │   └── publish_check.py        # 发布检查（可公开，本身就是个加分项）
-├── eval/eval_set.json          # 20 条评测集模板（可公开，答案字段保持 [待补充] 或填自造数据）
+├── eval/eval_set.json          # 20 条评测集，答案字段为自造假数据，可公开
 ├── data/documents/             # 6 份：虚构示例 2 份 + 自编 OBD-II 码表 2 份 + 法规全文 + 索引
 ├── Dockerfile / docker-compose.yml
 ├── requirements*.txt

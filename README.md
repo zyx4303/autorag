@@ -23,11 +23,11 @@
 
 **① 正常问答**：结论 + `[n]` 角标 + 依据列表 + 命中的原文片段，右上角还有检索/生成耗时拆解
 
-![正常问答，带引用](docs/images/01-answer-with-citations.png)
+![正常问答，带引用](wiki/docs/assets/images/01-answer-with-citations.png)
 
 **② 无依据时拒答**：明确说"未找到"，指出资料里有什么、没有什么，并给出确认渠道
 
-![无依据时拒绝作答](docs/images/02-refusal-no-evidence.png)
+![无依据时拒绝作答](wiki/docs/assets/images/02-refusal-no-evidence.png)
 
 **③ 配套文档站**：同一套内容还拆成了 21 页的 MkDocs 站点，放在 `wiki/` 下。左侧导航 + 中文分词搜索，
 图表和字体全部本地化（断网可用），严格模式构建零警告。
@@ -160,7 +160,7 @@ python scripts/run_eval.py --limit 5
 | 无依据兜底 | 检索为空或（纯向量模式下）相似度低于阈值时**不调用大模型**，直接返回确认渠道 | 同上 `should_refuse` |
 | 增量入库 | `data/registry.json` 记录 checksum，未变更文件跳过；磁盘删除的文档同步清理 | `app/services/ingestion_service.py` |
 | 可观测 | `/health`、`/stats`、每次问答返回 `latency` 拆解（检索/生成/合计）与 token 用量 | `app/api/routes_system.py` |
-| 评测闭环 | 20 条评测集模板 + HTTP 接口评测 + 独立脚本，输出 JSON/Markdown 报告 | `eval/eval_set.json`、`scripts/run_eval.py` |
+| 评测闭环 | 20 条评测集（真值已补齐）+ HTTP 接口评测 + 独立脚本，输出 JSON/Markdown 报告 | `eval/eval_set.json`、`scripts/run_eval.py` |
 | 交付 | Dockerfile（非 root + healthcheck + tini）、docker-compose.yml、内置零依赖调试控制台 | `Dockerfile`、`app/web/console.html` |
 
 ---
@@ -210,7 +210,7 @@ AutoRAG/
 │       ├── console.html         # 内置调试页（打开 http://127.0.0.1:8000/ 即用）
 │       └── guard.html           # 变更审计面板（打开 http://127.0.0.1:8000/guard）
 ├── eval/
-│   ├── eval_set.json            # 20 条评测集模板（答案位置为 [待补充]）
+│   ├── eval_set.json            # 20 条评测集，ground_truth 已按现有语料补齐
 │   └── results/                 # 评测报告输出目录（自动创建）
 ├── scripts/
 │   ├── preflight.py             # 启动前自检：一条命令定位环境/配置/依赖问题
@@ -231,8 +231,6 @@ AutoRAG/
 ├── requirements-local.txt       # 可选：本地向量模型
 ├── Dockerfile
 ├── docker-compose.yml
-├── docs/
-│   └── images/                  # README 用的真实运行截图
 ├── wiki/                        # MkDocs 文档站（21 页 / 7 个分组，可离线查阅）
 ├── LICENSE                      # MIT
 ├── NOTICE                       # 示例文档的来源与授权说明
@@ -506,9 +504,9 @@ with httpx.stream(
 
 ## 6. 评测集与评测方式
 
-### 6.1 评测集模板
+### 6.1 评测集
 
-[eval/eval_set.json](eval/eval_set.json) 提供 **20 条**汽车售后场景问题，覆盖：
+[eval/eval_set.json](eval/eval_set.json) 提供 **20 条**汽车售后场景问题，`ground_truth` 已按仓库内语料逐条补齐，覆盖：
 保养周期、油液规格、易损件、故障码、电气/蓄电池、轮胎胎压、季节性检查、
 使用与应急、故障诊断、保修条款与索赔流程，以及 **1 条负样本**（用于检验系统是否拒答）。
 

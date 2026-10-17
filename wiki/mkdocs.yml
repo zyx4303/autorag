@@ -1,0 +1,129 @@
+site_name: AutoRAG 文档
+site_description: 汽车售后 RAG 知识库问答系统 · 完整项目文档
+site_author: 张宇翔
+site_url: https://zyx4303.github.io/autorag/
+repo_url: https://github.com/zyx4303/autorag
+repo_name: zyx4303/autorag
+copyright: 代码采用 MIT License · 文档内容与示例数据说明见「关于项目」
+
+docs_dir: docs
+
+theme:
+  name: material
+  language: zh
+  # 不加载 Google Fonts：中文站点用系统字体（微软雅黑/苹方）渲染更好，
+  # 且完全离线可用，避免国内访问 fonts.googleapis.com 慢或失败导致字体闪烁。
+  font: false
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: 切换到深色模式
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: 切换到浅色模式
+  features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.tooltips
+    - toc.follow
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.snippets
+  - pymdownx.critic
+  - pymdownx.caret
+  - pymdownx.mark
+  - pymdownx.tilde
+  - toc:
+      permalink: true
+      toc_depth: 3
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+
+plugins:
+  - search:
+      lang:
+        - zh
+        - en
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/zyx4303/autorag
+      name: GitHub 仓库
+
+# Mermaid 本地化：预先定义 window.mermaid，让 Material 跳过 unpkg CDN
+# （Material 内部逻辑：typeof mermaid == "undefined" 时才从 CDN 加载）
+# 国内直连 unpkg 实测需 25 秒以上，本地化后图表秒开，且离线可用。
+extra_javascript:
+  - assets/javascripts/mermaid.min.js
+
+nav:
+  - 首页: index.md
+  - 快速上手:
+      - 5 分钟跑通检索链路: getting-started/quickstart.md
+      - 完整安装与配置: getting-started/install.md
+      - 环境变量清单: getting-started/configuration.md
+      - Docker 部署: getting-started/docker.md
+  - 架构与实现:
+      - 整体架构与目录结构: architecture/index.md
+      - 结构感知切分: architecture/chunking.md
+      - 混合检索与重排: architecture/retrieval.md
+      - Embedding 三种模式: architecture/embedding.md
+      - 引用校验与无依据拒答: architecture/citation.md
+  - 接口参考:
+      - 接口一览: api/reference.md
+      - 调用示例: api/examples.md
+  - 扩展模块:
+      - FreshGuard 变更影响分析: modules/freshguard.md
+      - LangGraph Agent: modules/agent.md
+  - 评测与实测:
+      - 评测集与评测方式: evaluation/evaluation.md
+      - 实测记录（诚实版）: evaluation/results.md
+  - 运维排查:
+      - 排查手册: ops/troubleshooting.md
+      - 测试与自检: ops/testing.md
+  - 关于项目:
+      - 设计与已知局限: about/design.md
+      - 待补充与路线图: about/roadmap.md
+      - 作为作品集使用: about/portfolio.md

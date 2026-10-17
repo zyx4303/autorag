@@ -1,0 +1,14 @@
+# 构建产物（可用 `mkdocs build` 随时重新生成）
+site/
+
+# 验证脚本与截图（一次性使用，非文档站内容）
+_verify*.js
+_debug.js
+_shots/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# MkDocs 本地缓存
+.cache/

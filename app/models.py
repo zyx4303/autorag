@@ -57,6 +57,14 @@ class RetrievedChunk(BaseModel):
     score: float = Field(default=0.0, description="融合/排序后的最终分数，越大越相关")
     vector_score: Optional[float] = Field(default=None, description="向量相似度（余弦，越大越像）")
     keyword_score: Optional[float] = Field(default=None, description="BM25 分数")
+    rerank_score: Optional[float] = Field(
+        default=None,
+        description="cross-encoder 精排分数（sigmoid 后 0~1）；只有启用精排时才有值",
+    )
+    heuristic_score: Optional[float] = Field(
+        default=None,
+        description="启用精排前的启发式分数，便于对比两种排序的差异",
+    )
     from_vector: bool = False
     from_keyword: bool = False
 
@@ -93,6 +101,12 @@ class RetrievedDebug(BaseModel):
     score: float = 0.0
     vector_score: Optional[float] = None
     keyword_score: Optional[float] = None
+    rerank_score: Optional[float] = Field(
+        default=None, description="精排概率（0~1），仅启用精排时有值"
+    )
+    heuristic_score: Optional[float] = Field(
+        default=None, description="精排前的启发式分数，便于对比两种排序"
+    )
     from_vector: bool = False
     from_keyword: bool = False
     snippet: str = ""
@@ -133,6 +147,13 @@ class ChatResponse(BaseModel):
     latency: Latency = Field(default_factory=Latency)
     usage: Optional[TokenUsage] = None
     warnings: List[str] = Field(default_factory=list)
+    attribution: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "逐句归因报告：多少句有依据 / 依据薄弱 / 疑似无依据 / 未标引用，"
+            "以及依据不足的句子明细。仅在 ATTRIBUTION_ENABLED=true 时有值。"
+        ),
+    )
 
 
 class RetrieveRequest(BaseModel):

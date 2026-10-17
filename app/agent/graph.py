@@ -38,8 +38,10 @@ from langgraph.graph.message import add_messages
 
 from app.agent.tools import ToolRegistry, ToolResult
 from app.config import Settings
+from app.core.attribution import AttributionChecker, build_checker
 from app.core.llm_client import LLMClient, LLMError
 from app.logging_conf import get_logger
+from app.models import RetrievedChunk
 
 logger = get_logger(__name__)
 
@@ -101,6 +103,10 @@ class AgentState(TypedDict, total=False):
     user_questions: List[str]                 # 要问用户的问题
     stop_reason: str                          # 收尾原因：answered / max_iterations / ask_user / error
     error: str
+    # ---- 自检（reflect 节点）----
+    reflection_count: int                     # 已重答次数
+    reflection_action: str                    # pass / retry
+    reflection_report: Dict[str, Any]         # 归因报告（供前端与评测复用）
 
 
 # --------------------------------------------------------------------------- #
@@ -192,6 +198,13 @@ class AgentGraph:
         self._tools = tools
         self._max_iterations = max(1, int(max_iterations))
         self._checkpointer = checkpointer or MemorySaver()
+        # 自检：用逐句归因判断答案是否站得住，不合格就带反馈回 agent 重答一轮。
+        # 判据是确定性的，不额外调用 LLM 自评（见 _reflect_node 注释）。
+        self._reflection_enabled = bool(
+            getattr(settings, "agent_reflection_enabled", True)
+        )
+        self._max_reflections = max(0, int(getattr(settings, "agent_max_reflections", 1)))
+        self._attribution: Optional[AttributionChecker] = build_checker(settings)
         self._graph = self._build()
 
     @property
@@ -207,13 +220,20 @@ class AgentGraph:
         builder = StateGraph(AgentState)
         builder.add_node("agent", self._agent_node)
         builder.add_node("tools", self._tools_node)
+        builder.add_node("reflect", self._reflect_node)
         builder.add_node("finalize", self._finalize_node)
 
         builder.set_entry_point("agent")
         builder.add_conditional_edges(
             "agent",
             self._route_after_agent,
-            {"tools": "tools", "finalize": "finalize"},
+            # 三个去向都必须列全：出错时直接 finalize，不给自检机会
+            {"tools": "tools", "reflect": "reflect", "finalize": "finalize"},
+        )
+        builder.add_conditional_edges(
+            "reflect",
+            self._route_after_reflect,
+            {"agent": "agent", "finalize": "finalize"},
         )
         builder.add_edge("tools", "agent")
         builder.add_edge("finalize", END)
@@ -273,7 +293,11 @@ class AgentGraph:
             return "finalize"
         if state.get("current_tool_calls"):
             return "tools"
-        return "finalize"
+        # 模型给出了答案：先过一遍自检，再决定收尾还是重答
+        return "reflect"
+
+    def _route_after_reflect(self, state: AgentState) -> str:
+        return "agent" if state.get("reflection_action") == "retry" else "finalize"
 
     # ------------------------------------------------------------------ #
     # 节点 2：tools —— 执行工具，把结果与 trace 写回状态
@@ -392,7 +416,132 @@ class AgentGraph:
         return update
 
     # ------------------------------------------------------------------ #
-    # 节点 3：finalize —— 收尾（正常回答 / 追问 / 上限 / 报错）
+    # 节点 3：reflect —— 自检（答案是否站得住）
+    # ------------------------------------------------------------------ #
+    async def _reflect_node(
+        self, state: AgentState, writer: Any = None
+    ) -> Dict[str, Any]:
+        """答完后自检：逐句检查"结论是否真被检索到的片段支撑"。
+
+        为什么不用"再调一次 LLM 让模型自评"：
+        - 模型自评会引入第二个不确定性源，而且说不出"凭什么是它不合格"；
+        - 归因校验是确定性的，每句都能给出覆盖率，人能复核；
+        - 不增加任何 token 成本。
+
+        触发重答的条件刻意克制：
+        只有出现 **unsupported（疑似无依据）** 或整体得分过低才重答。
+        单纯的 weak（同义改写）不触发 —— 否则会为了指标反复改写，把答案越改越差。
+        """
+        pass_payload: Dict[str, Any] = {"reflection_action": "pass"}
+
+        if not self._reflection_enabled or self._attribution is None:
+            return pass_payload
+
+        answer = (state.get("final_answer") or "").strip()
+        docs = state.get("retrieved_docs") or []
+        # 没有答案（等用户补充信息）或压根没检索过（只用了业务工具）→ 无从校验
+        if not answer or not docs:
+            return pass_payload
+
+        chunks = self._docs_to_chunks(docs)
+        try:
+            # match_any=True：Agent 会多次调用 search_kb，每次编号都从 1 重来，
+            # 按 [n] 对齐会张冠李戴，只能退化为"在全量已检索片段里找依据"。
+            report = self._attribution.check(answer, chunks, match_any=True)
+        except Exception as exc:  # noqa: BLE001 - 自检失败不能影响主流程
+            logger.warning("自检归因失败（已跳过）：%s", exc)
+            return pass_payload
+
+        count = int(state.get("reflection_count", 0))
+        needs_retry = report.unsupported > 0 or (
+            report.total >= 4 and report.score < 0.6
+        )
+        can_retry = needs_retry and count < self._max_reflections
+
+        _emit(
+            writer,
+            {
+                "kind": "reflection",
+                "attempt": count + 1,
+                "score": round(report.score, 4),
+                "unsupported": report.unsupported,
+                "no_citation": report.no_citation,
+                "action": "retry" if can_retry else "pass",
+            },
+        )
+
+        if not can_retry:
+            if needs_retry:
+                logger.warning(
+                    "自检未通过但重答额度已用尽（score=%.2f, unsupported=%d）",
+                    report.score,
+                    report.unsupported,
+                )
+            return {
+                "reflection_action": "pass",
+                "reflection_report": report.to_dict(),
+            }
+
+        logger.info(
+            "自检未通过，回退重答（第 %d 次）：score=%.2f unsupported=%d",
+            count + 1,
+            report.score,
+            report.unsupported,
+        )
+        return {
+            "reflection_action": "retry",
+            "reflection_count": count + 1,
+            "reflection_report": report.to_dict(),
+            # 清空答案，逼 agent 重新生成而不是沿用旧结论
+            "final_answer": "",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": self._compose_reflection_feedback(report),
+                }
+            ],
+        }
+
+    @staticmethod
+    def _docs_to_chunks(docs: List[Dict[str, Any]]) -> List[RetrievedChunk]:
+        """把状态里的 retrieved_docs（dict）转成归因校验需要的 RetrievedChunk。"""
+        chunks: List[RetrievedChunk] = []
+        for index, item in enumerate(docs, start=1):
+            chunks.append(
+                RetrievedChunk(
+                    chunk_id=str(item.get("chunk_id") or f"agent_{index}"),
+                    doc_id=str(item.get("doc_id") or ""),
+                    source=str(item.get("source") or ""),
+                    title=str(item.get("title") or ""),
+                    section=str(item.get("section") or ""),
+                    position=int(item.get("position") or 0),
+                    text=str(item.get("text") or ""),
+                    score=float(item.get("score") or 0.0),
+                )
+            )
+        return chunks
+
+    @staticmethod
+    def _compose_reflection_feedback(report: Any) -> str:
+        """把归因报告转成给模型看的修正要求。"""
+        lines = [
+            "【自检反馈】你上一条回答里有内容在检索片段中找不到依据。请修正后重新作答："
+        ]
+        flagged = [
+            s
+            for s in report.sentences
+            if s.status in {"unsupported", "no_citation"}
+        ][:4]
+        for item in flagged:
+            lines.append(f"- [{item.status}] {item.text[:60]}")
+        lines.append(
+            "要求：只保留能在检索片段中找到依据的结论；"
+            "找不到依据的部分必须明确说明「当前知识库中未找到相关依据」，不要推测或补常识。"
+        )
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------ #
+    # 节点 4：finalize —— 收尾（正常回答 / 追问 / 上限 / 报错）
     # ------------------------------------------------------------------ #
     async def _finalize_node(self, state: AgentState) -> Dict[str, Any]:
         already = (state.get("final_answer") or "").strip()
@@ -614,6 +763,9 @@ class AgentGraph:
             "user_questions": [],
             "stop_reason": "",
             "error": "",
+            "reflection_count": 0,
+            "reflection_action": "",
+            "reflection_report": {},
         }
         async for mode, chunk in self._graph.astream(
             initial, config=config, stream_mode=["updates", "custom"]
@@ -683,6 +835,9 @@ class AgentGraph:
             "user_questions": [],
             "stop_reason": "",
             "error": "",
+            "reflection_count": 0,
+            "reflection_action": "",
+            "reflection_report": {},
         }
         try:
             final_state = await self._graph.ainvoke(initial, config=config)
@@ -711,4 +866,8 @@ class AgentGraph:
             "user_questions": final_state.get("user_questions") or [],
             "latency_ms": int((time.perf_counter() - started) * 1000),
             "tool_counts": dict(self._tools.call_counts),
+            "reflection": {
+                "count": int(final_state.get("reflection_count") or 0),
+                "report": final_state.get("reflection_report") or {},
+            },
         }

@@ -66,6 +66,13 @@ class AgentChatResponse(BaseModel):
     user_questions: List[str] = Field(default_factory=list)
     latency_ms: int = 0
     tool_counts: Dict[str, int] = Field(default_factory=dict)
+    reflection: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "自检结果：{count: 重答次数, report: 逐句归因报告}。"
+            "AGENT_REFLECTION_ENABLED=true 时有值。"
+        ),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -98,6 +105,7 @@ async def agent_chat(
         user_questions=result.get("user_questions", []),
         latency_ms=result.get("latency_ms", 0),
         tool_counts=result.get("tool_counts", {}),
+        reflection=result.get("reflection"),
     )
 
 

@@ -23,11 +23,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.config import Settings  # noqa: E402
+from app.core.attribution import AttributionChecker  # noqa: E402
 from app.core.bm25 import BM25Index  # noqa: E402
 from app.core.chunker import chunk_document  # noqa: E402
 from app.core.embedding import HashEmbedder  # noqa: E402
 from app.core.text_utils import normalize_text, split_sentences, tokenize  # noqa: E402
-from app.models import Citation, SourceDocument  # noqa: E402
+from app.models import Citation, RetrievedChunk, SourceDocument  # noqa: E402
 from app.services.rag_pipeline import QAEngine  # noqa: E402
 
 PASSED = 0
@@ -369,6 +370,58 @@ def test_agent_invariants() -> None:
     )
 
 
+def test_attribution() -> None:
+    print("\n[9] 逐句归因校验（防幻觉）")
+    chunks = [
+        RetrievedChunk(
+            chunk_id="c1",
+            doc_id="d1",
+            source="保养.md",
+            section="周期表",
+            text="发动机机油 | 每 8,000 km 或每 8 个月更换（以先到者为准）。",
+        ),
+        RetrievedChunk(
+            chunk_id="c2",
+            doc_id="d2",
+            source="三包.md",
+            section="条款",
+            text="家用汽车产品包修期不低于 3 年或者行驶里程 60,000 公里。",
+        ),
+    ]
+    checker = AttributionChecker()
+
+    r = checker.check("发动机机油为每 8,000 km 或每 8 个月更换 [1]。", chunks)
+    check(
+        "贴合原文的断言判为有依据",
+        r.supported == 1 and r.unsupported == 0,
+        f"supported={r.supported} total={r.total}",
+    )
+
+    # 这是分句级校验的核心价值：整句覆盖率会被真话拉高，必须拆开才能抓到
+    r2 = checker.check("发动机机油每 8,000 km 更换 [1]，可延长发动机寿命约 30% [1]。", chunks)
+    check(
+        "句内幻觉不被整句覆盖率掩盖",
+        r2.weak + r2.unsupported >= 1,
+        f"weak={r2.weak} unsupported={r2.unsupported}",
+    )
+
+    r3 = checker.check("其他品牌同级车型保养价格约每次 500 元 [2]。", chunks)
+    check("完全无依据判为 unsupported", r3.unsupported == 1, f"unsupported={r3.unsupported}")
+
+    r4 = checker.check("该车冬季应使用 0W-20 全合成机油。", chunks)
+    check("无引用角标被标记", r4.no_citation == 1, f"no_citation={r4.no_citation}")
+
+    # 拒答场景主要是这类话术，若当成"无依据断言"会产生大量误报
+    r5 = checker.check("当前知识库中未找到相关依据。建议以随车《用户手册》为准。", chunks)
+    check("元话语/免责话术不计入断言", r5.total == 0, f"total={r5.total}")
+
+    clauses = checker._split_clauses("包修期不低于 3 年或 60,000 公里")
+    check("数字千分位不被误切", len(clauses) == 1, str(clauses))
+
+    body = checker.split_body("结论 [1]。\n\n依据：\n[1] 保养.md · 周期表")
+    check("「依据：」清单被剥离", "依据" not in body and "结论" in body, body[:30])
+
+
 def main() -> int:
     print("=" * 68)
     print("AutoRAG 冒烟测试（纯逻辑，不联网、不需要 API Key、不调用大模型）")
@@ -384,6 +437,7 @@ def main() -> int:
     test_hash_embedder()
     test_guard_claims()
     test_agent_invariants()
+    test_attribution()
 
     print("\n" + "=" * 68)
     print(f"结果：通过 {PASSED} 项，失败 {FAILED} 项")

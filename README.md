@@ -143,6 +143,9 @@ python scripts/run_eval.py --limit 5
 | 多格式加载 | `.md/.markdown/.txt` 内置；`.pdf/.docx` 走可选依赖，缺失时给出安装提示而不是崩溃 | `app/core/loader.py` |
 | 向量库 | Chroma `PersistentClient` 落盘，cosine 距离，**显式传入自己算的向量**（不依赖 Chroma 默认模型下载） | `app/core/vector_store.py` |
 | 混合检索 | 向量召回 + 自研 BM25（零依赖、中英文混合分词含中文 bigram）→ RRF 融合 → 四信号重排（融合分/词覆盖/高精度串/整句命中） | `app/core/bm25.py`、`app/core/retriever.py` |
+| 语义精排（可选） | 承接混合检索结果，用 cross-encoder 对 `(query, passage)` 联合编码打分。实测把「车辆失火是什么原因」从第 3 名提到第 1 名；CPU 上 8 候选约 3.7s | `app/core/reranker.py` |
+| 逐句归因校验 | 把回答拆成**分句**，逐句核对关键词是否真在被引用的片段里 —— 抓「引用编号合法、但内容并不在片段中」这类编号校验看不出的幻觉 | `app/core/attribution.py` |
+| Agent 自检 | 答完后用归因校验自检，发现无依据断言就带反馈回 `agent` 重答一轮（上限可配）。判据确定性，不额外调用 LLM 自评 | `app/agent/graph.py` |
 | Embedding 可切换 | `api`（OpenAI 兼容）/ `local`（sentence-transformers）/ `hash`（零依赖，仅验证链路） | `app/core/embedding.py` |
 | 带引用回答 | 资料按 `[n]` 编号注入提示词，回答必须带角标；服务端校验角标是否越界 | `app/services/rag_pipeline.py` |
 | 无依据兜底 | 检索为空或（纯向量模式下）相似度低于阈值时**不调用大模型**，直接返回确认渠道 | 同上 `should_refuse` |
@@ -176,6 +179,8 @@ AutoRAG/
 │   │   ├── vector_store.py      # Chroma 封装
 │   │   ├── bm25.py              # 自研 BM25 + JSON 持久化
 │   │   ├── retriever.py         # 向量 + BM25 + RRF 融合 + 重排
+│   │   ├── reranker.py          # cross-encoder 语义精排（可选，懒加载 + 失败降级）
+│   │   ├── attribution.py       # 逐句归因校验（防幻觉，确定性、零额外模型调用）
 │   │   └── llm_client.py        # OpenAI 兼容客户端（同步 + SSE 流式 + 重试）
 │   ├── services/
 │   │   ├── container.py         # 组件装配（失败降级不崩服务）
@@ -470,6 +475,17 @@ with httpx.stream(
 | `CANDIDATE_K` | `20` | 否 | 每路召回候选数 |
 | `MIN_SCORE` | `0.05` | 否 | 仅 `RETRIEVAL_MODE=vector` 时生效的拒答阈值 |
 | `REFUSE_WHEN_EMPTY` | `true` | 否 | 检索为空时是否跳过 LLM 直接兜底 |
+| `RERANK_ENABLED` | `false` | 否 | 是否启用 cross-encoder 语义精排（需先下载模型） |
+| `RERANK_MODEL` | `BAAI/bge-reranker-base` | 否 | 精排模型名或本地目录。**中文场景建议 `bge-reranker-v2-m3`**，base 版区分度不足 |
+| `RERANK_TOP_N` | `20` | 否 | 只对前 N 个候选做精排；不应小于 `TOP_K`（会被自动纠正） |
+| `RERANK_DEVICE` | `cpu` | 否 | `cpu` / `cuda` |
+| `RERANK_MAX_LENGTH` | `512` | 否 | 精排时截断长度，直接影响 CPU 耗时（192/256/384/512 实测约 2.8/3.3/5.0/6.8s per 20 条） |
+| `RERANK_BATCH_SIZE` | `16` | 否 | 精排批大小 |
+| `ATTRIBUTION_ENABLED` | `true` | 否 | 是否做逐句归因校验（防幻觉） |
+| `ATTRIBUTION_WEAK_THRESHOLD` | `0.35` | 否 | 覆盖率 ≥ 此值判为"有依据" |
+| `ATTRIBUTION_UNSUPPORTED_THRESHOLD` | `0.12` | 否 | 覆盖率低于此值判为"疑似无依据" |
+| `AGENT_REFLECTION_ENABLED` | `true` | 否 | Agent 答完后是否自检 |
+| `AGENT_MAX_REFLECTIONS` | `1` | 否 | 最多重答轮数（调大会成倍增加延迟与 token） |
 | `API_HOST` / `API_PORT` | `0.0.0.0` / `8000` | 否 | 监听地址与端口 |
 | `API_KEY` | 空 | 否 | 填了才启用 `X-API-Key` 校验 |
 | `CORS_ORIGINS` | `*` | 否 | 允许的跨域来源，逗号分隔 |
@@ -791,6 +807,39 @@ python scripts/preflight.py       # 环境与配置自检（见 9.0 节）
 > 另需注意：若把 `TOP_K` 从 5 提到 8，`车辆失火` 这类问题在生成侧就已经能答对
 > （正确答案在前 3），说明**排序失误不等于问答失败**。
 
+### 12.3 优化迭代：从「能跑」到「更准」（三轮改动，每轮都有前后对比）
+
+在示例数据集上做了三轮针对性优化。**每一轮都先记基线、改完再测** ——
+没有前后对比数据的"优化"一律不算数。
+
+| 轮次 | 改动 | 关键效果 | 代价 |
+| --- | --- | --- | --- |
+| 第 1 轮 | 移出索引类文档；`TOP_K` 5→8；温度 0.2→0.1 | 「虚构车型A多久换一次机油」第 4 名 → **第 1 名**；前 3 名命中 5/6 → **6/6** | 无（检索仍 22ms）|
+| 第 2 轮 | 接入 cross-encoder 精排（`bge-reranker-v2-m3`） | 「车辆失火是什么原因」第 3 → **第 1**；「P0420」第 2 → **第 1**；第 1 名命中 4/6 → **5/6** | 检索 22ms → **3.7s**（CPU）|
+| 第 3 轮 | 逐句归因校验 + Agent 自检节点 | 能指出「哪句话在片段里找不到依据」；实测某次 Agent 首次作答得分 **0.52**（3 处无依据）→ 自检重答后 **0.944** | 归因零额外成本；自检可能多一轮 LLM 调用 |
+
+**为什么是这个顺序**：检索决定准确度上限，生成层只能在检索给的范围内活动。
+检索没召回的片段，模型再强也答不对 —— 所以先修检索，再修生成。
+
+**几个反直觉的实测结论**：
+
+1. **`bge-reranker-base` 接入后效果反而更差**。它只有 110M 参数，
+   「正确片段 vs 干扰项」只差 **0.228 logit**，排序基本是噪声，
+   实测把「车辆失火」从第 3 名打到了第 6 名。换成 `bge-reranker-v2-m3`
+   （区分度 **6.103**，提升 27 倍）才真正生效 —— **模型大小不是关键，区分度才是。**
+2. **双重 sigmoid 会把精排直接废掉**。`sentence-transformers` 的 `CrossEncoder.predict()`
+   对 `num_labels=1` 的模型**已经套过 sigmoid**，调用方再做一次，
+   0.475/0.013 会被压成 0.617/0.503。表现是"精排后排名完全不变"，
+   极易误判成模型不行。本项目直接用 transformers 取原始 logit。
+3. **归因必须下沉到分句级**。「机油每 8,000 km 更换 [1]，可延长发动机寿命约 30% [1]」
+   整句覆盖率会被真话拉高、判成"有依据"；拆成分句后后半段覆盖率掉到 0.24 才抓得住。
+4. **元话语不需要引用**。拒答场景里「未找到…」「建议以《用户手册》为准」这类话术
+   天然没有出处，若要求它们标引用，实测 16 个校验单元里有 8 个是误报。
+
+**已知局限（如实记录）**：归因是词面覆盖，对同义改写偏保守（判 `weak` 而非 `supported`）；
+精排在 CPU 上有约 3.7s 延迟，GPU 或更小模型可缓解；
+自检只对 `unsupported` 触发、`weak` 不触发 —— 这是刻意的，避免为了指标反复改写把答案越改越差。
+
 ---
 
 ## 13. FreshGuard：知识库变更影响分析（第二个模块）
@@ -1005,8 +1054,13 @@ curl http://127.0.0.1:8000/api/v1/agent/tools    # 四个工具的完整 JSON sc
 
 ## 16. 下一步可做的扩展（按性价比排序）
 
-1. 接入 **rerank 模型**（如 bge-reranker）替换启发式重排；
-2. 增加 **多轮对话**：按 `session_id` 维护历史，并对历史问题做查询改写；
+> **已完成**（详见 [12.3 优化迭代](#123-优化迭代从能跑到更准三轮改动每轮都有前后对比)）：
+> ~~接入 rerank 模型~~ → `app/core/reranker.py`；
+> ~~逐句归因校验~~ → `app/core/attribution.py`；
+> ~~Agent 自检节点~~ → `app/agent/graph.py`。
+
+1. **多轮对话**：按 `session_id` 维护历史，并对历史问题做查询改写；
+2. **NLI 一致性校验**：把归因从"词面覆盖"升级为语义蕴含判断（现在对同义改写偏保守）；
 3. **引用高亮**：在 `console.html` 里把引用片段与答案句做对齐展示；
 4. **人工评测表**：把 `eval/results/*.md` 变成可勾选的人工打分表，明确区分自动指标与人工结论；
 5. **入库异步化**：改成后台任务 + 进度查询，支持大批量文档；

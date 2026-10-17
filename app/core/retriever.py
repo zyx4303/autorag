@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from app.config import Settings
 from app.core.bm25 import BM25Index
@@ -20,6 +20,9 @@ from app.core.text_utils import make_snippet, tokenize
 from app.core.vector_store import VectorStore
 from app.logging_conf import get_logger
 from app.models import RetrievedChunk
+
+if TYPE_CHECKING:  # 仅类型标注用，避免运行期循环导入
+    from app.core.reranker import CrossEncoderReranker
 
 logger = get_logger(__name__)
 
@@ -58,10 +61,14 @@ class HybridRetriever:
         settings: Settings,
         vector_store: VectorStore,
         bm25_index: BM25Index,
+        reranker: Optional["CrossEncoderReranker"] = None,
     ) -> None:
         self._settings = settings
         self._vector_store = vector_store
         self._bm25 = bm25_index
+        # 精排器（可选）。None 表示未启用或初始化失败 —— 此时只走启发式重排，
+        # 检索能力与接入精排前完全一致（优雅降级，不因精排挂了而不可用）。
+        self._reranker = reranker
 
     # ------------------------------------------------------------------ #
     # 单路召回
@@ -299,6 +306,14 @@ class HybridRetriever:
 
         fused = self._fuse(vector_hits, keyword_hits, effective_mode, query)
 
+        # 可选：cross-encoder 语义精排。
+        # 位置很关键 —— 必须在启发式重排**之后**、截断 final_k **之前**：
+        # 精排要看到足够大的候选池，否则排在后面的正确答案没有机会被救回来。
+        if self._reranker is not None:
+            fused = await self._reranker.rerank(
+                query, fused, top_n=int(self._settings.rerank_top_n)
+            )
+
         results: List[RetrievedChunk] = []
         for item in fused[:final_k]:
             if float(item.get("score", 0.0)) <= 0:
@@ -315,6 +330,8 @@ class HybridRetriever:
                     score=float(item["score"]),
                     vector_score=item.get("vector_score"),
                     keyword_score=item.get("keyword_score"),
+                    rerank_score=item.get("rerank_score"),
+                    heuristic_score=item.get("heuristic_score"),
                     from_vector=bool(item.get("from_vector")),
                     from_keyword=bool(item.get("from_keyword")),
                 )
@@ -343,6 +360,8 @@ class HybridRetriever:
                 ),
                 "from_vector": item.from_vector,
                 "from_keyword": item.from_keyword,
+                "rerank_score": item.rerank_score,
+                "heuristic_score": item.heuristic_score,
                 "snippet": make_snippet(item.text, snippet_chars),
             }
             for index, item in enumerate(results)

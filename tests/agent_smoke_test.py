@@ -427,6 +427,64 @@ def test_prompt_and_limits() -> None:
 
 
 # --------------------------------------------------------------------------- #
+def test_reflection(tmp_root: Path) -> None:
+    print("\n[9] 自检节点（反思）")
+
+    settings, _store, registry = make_env(tmp_root / "s9")
+    graph = AgentGraph(settings, FakeLLM([]), registry)
+    good_doc = {"text": "发动机机油 | 每 8,000 km 或每 8 个月更换（以先到者为准）"}
+
+    # 答案与片段一致 → 放行
+    out = asyncio.run(
+        graph._reflect_node(
+            {
+                "final_answer": "发动机机油每 8,000 km 或 8 个月更换 [1]。",
+                "retrieved_docs": [good_doc],
+                "reflection_count": 0,
+            }
+        )
+    )
+    check("贴合片段的答案判为 pass", out.get("reflection_action") == "pass", str(out.get("reflection_action")))
+
+    # 句中掺入片段完全没有的内容 → 触发重答（分句级校验的价值）
+    # 注意：这里必须用 unsupported（覆盖率 ~0），而不是 weak（同义改写区）。
+    # 设计上有意只让 unsupported 触发重答，避免为了指标反复改写把答案越改越差。
+    hallucination = "发动机机油每 8,000 km 更换 [1]，厂家还提供终身免费保养服务 [1]。"
+    out2 = asyncio.run(
+        graph._reflect_node(
+            {
+                "final_answer": hallucination,
+                "retrieved_docs": [good_doc],
+                "reflection_count": 0,
+            }
+        )
+    )
+    check("含无依据断言时触发重答", out2.get("reflection_action") == "retry", str(out2.get("reflection_action")))
+    check("重答时清空旧答案", out2.get("final_answer") == "", repr(out2.get("final_answer")))
+    check("重答时带上修正要求", any("自检反馈" in str(m.get("content")) for m in (out2.get("messages") or [])))
+
+    # 额度用尽 → 不再重答，但保留报告
+    out3 = asyncio.run(
+        graph._reflect_node(
+            {
+                "final_answer": hallucination,
+                "retrieved_docs": [good_doc],
+                "reflection_count": 99,
+            }
+        )
+    )
+    check("重答额度用尽后放行", out3.get("reflection_action") == "pass", str(out3.get("reflection_action")))
+    check("额度用尽仍保留归因报告", bool(out3.get("reflection_report")), str(out3.get("reflection_report"))[:40])
+
+    # 没有检索片段（只用了业务工具）→ 无从校验，放行
+    out4 = asyncio.run(
+        graph._reflect_node(
+            {"final_answer": "该车 16000 公里应更换机油。", "retrieved_docs": [], "reflection_count": 0}
+        )
+    )
+    check("无检索片段时不触发自检", out4.get("reflection_action") == "pass", str(out4.get("reflection_action")))
+
+
 def main() -> int:
     print("=" * 70)
     print("Agent 行为测试（脚本化 LLM，确定性，不联网、不需要 API Key）")
@@ -443,6 +501,7 @@ def main() -> int:
     test_parse_tool_calls()
     asyncio.run(test_graph_behaviors(tmp_root))
     test_prompt_and_limits()
+    test_reflection(tmp_root)
 
     print("\n" + "=" * 70)
     print(f"结果：通过 {PASSED} 项，失败 {FAILED} 项")

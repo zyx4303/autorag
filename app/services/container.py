@@ -66,9 +66,26 @@ def build_container(settings: Settings) -> ServiceContainer:
         logger.error(message)
         container.init_errors.append(message)
 
+    # ---- 精排（可选）----
+    # 初始化失败只降级为启发式重排，不影响检索可用性：
+    # 精排是锦上添花，不该成为新的故障点。
+    try:
+        from app.core.reranker import build_reranker
+
+        container.reranker = build_reranker(settings)
+    except Exception as exc:  # noqa: BLE001
+        message = f"精排初始化失败（将回退到启发式重排）：{exc}"
+        logger.error(message)
+        container.init_errors.append(message)
+
     # ---- 检索器 / 入库 / 问答 ----
     if container.vector_store is not None:
-        container.retriever = HybridRetriever(settings, container.vector_store, container.bm25)
+        container.retriever = HybridRetriever(
+            settings,
+            container.vector_store,
+            container.bm25,
+            reranker=container.reranker,
+        )
         container.ingestion = IngestionService(settings, container.vector_store, container.bm25)
         container.qa = QAEngine(settings, container.retriever, container.llm)
         container.evaluation = EvaluationService(settings, container.qa)

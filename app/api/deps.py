@@ -32,6 +32,8 @@ class ServiceContainer:
     vector_store: Optional[VectorStore] = None
     bm25: Optional[BM25Index] = None
     retriever: Optional[HybridRetriever] = None
+    # cross-encoder 精排器（可选）：未启用、或初始化失败时为 None
+    reranker: Optional[Any] = None
     ingestion: Optional[IngestionService] = None
     qa: Optional[QAEngine] = None
     evaluation: Optional[EvaluationService] = None

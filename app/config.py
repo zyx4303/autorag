@@ -174,6 +174,50 @@ class Settings(BaseModel):
     min_score: float = Field(default_factory=lambda: _env_float("MIN_SCORE", 0.05))
     refuse_when_empty: bool = Field(default_factory=lambda: _env_bool("REFUSE_WHEN_EMPTY", True))
 
+    # ---- 精排（cross-encoder，可选）----
+    # 启发式重排已到极限（见 app/core/retriever.py 的注释与实测记录），
+    # 精排用 (query, passage) 联合编码判断语义相关性，能纠正"字面匹配但语义无关"的排序错误。
+    # 默认关闭：它会显著增加单次检索耗时（CPU 上 20 个候选约 0.5~2 秒）。
+    rerank_enabled: bool = Field(default_factory=lambda: _env_bool("RERANK_ENABLED", False))
+    rerank_model: str = Field(
+        default_factory=lambda: _env_str("RERANK_MODEL", "BAAI/bge-reranker-base")
+    )
+    rerank_top_n: int = Field(default_factory=lambda: _env_int("RERANK_TOP_N", 20))
+    rerank_device: str = Field(default_factory=lambda: _env_str("RERANK_DEVICE", "cpu"))
+    rerank_max_length: int = Field(
+        default_factory=lambda: _env_int("RERANK_MAX_LENGTH", 512)
+    )
+    rerank_batch_size: int = Field(
+        default_factory=lambda: _env_int("RERANK_BATCH_SIZE", 16)
+    )
+
+    # ---- 逐句归因校验（防幻觉）----
+    # 生成后把回答拆成句子，逐句检查"关键信息是否真在被引用的片段里"，
+    # 专门抓「引用编号合法、但内容并不在片段中」这类编号校验看不出的幻觉。
+    # 只报告不拦截：结果写进响应的 attribution 字段 + warnings。
+    attribution_enabled: bool = Field(
+        default_factory=lambda: _env_bool("ATTRIBUTION_ENABLED", True)
+    )
+    # 覆盖率 >= 此值判为"有依据"
+    attribution_weak_threshold: float = Field(
+        default_factory=lambda: _env_float("ATTRIBUTION_WEAK_THRESHOLD", 0.35)
+    )
+    # 覆盖率低于此值判为"疑似无依据"
+    attribution_unsupported_threshold: float = Field(
+        default_factory=lambda: _env_float("ATTRIBUTION_UNSUPPORTED_THRESHOLD", 0.12)
+    )
+
+    # ---- Agent 自检（反思节点）----
+    # Agent 给出答案后，用逐句归因校验自检；发现"无依据断言"就带着反馈回到
+    # agent 节点重答一轮。判据是确定性的，不额外调用 LLM 自评。
+    agent_reflection_enabled: bool = Field(
+        default_factory=lambda: _env_bool("AGENT_REFLECTION_ENABLED", True)
+    )
+    # 最多重答几轮。设 1 是刻意的：重答本身有成本，且多数问题一次修正就够。
+    agent_max_reflections: int = Field(
+        default_factory=lambda: _env_int("AGENT_MAX_REFLECTIONS", 1)
+    )
+
     # ---- 服务 ----
     api_host: str = Field(default_factory=lambda: _env_str("API_HOST", "0.0.0.0"))
     api_port: int = Field(default_factory=lambda: _env_int("API_PORT", 8000))
@@ -264,6 +308,14 @@ class Settings(BaseModel):
             )
             self.candidate_k = self.top_k
 
+        if self.rerank_top_n < self.top_k:
+            warnings.append(
+                f"RERANK_TOP_N={self.rerank_top_n} 小于 TOP_K={self.top_k}，"
+                f"已自动提升到 {self.top_k}"
+                "（精排候选不足时，排在后面的正确答案没有机会被救回来）"
+            )
+            self.rerank_top_n = self.top_k
+
         return warnings
 
     def missing_required(self) -> List[str]:
@@ -316,6 +368,11 @@ class Settings(BaseModel):
             "retrieval_mode": self.retrieval_mode,
             "top_k": self.top_k,
             "candidate_k": self.candidate_k,
+            "rerank_enabled": self.rerank_enabled,
+            "rerank_model": self.rerank_model if self.rerank_enabled else None,
+            "rerank_top_n": self.rerank_top_n if self.rerank_enabled else None,
+            "attribution_enabled": self.attribution_enabled,
+            "agent_reflection_enabled": self.agent_reflection_enabled,
             "chunk_size": self.chunk_size,
             "chunk_overlap": self.chunk_overlap_effective,
             "collection": self.chroma_collection,

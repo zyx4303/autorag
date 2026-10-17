@@ -13,6 +13,7 @@ import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Set, Tuple
 
 from app.config import Settings
+from app.core.attribution import AttributionChecker, build_checker
 from app.core.llm_client import LLMClient, LLMError, LLMResult
 from app.core.retriever import HybridRetriever
 from app.core.text_utils import make_snippet
@@ -67,6 +68,8 @@ class QAEngine:
         self._settings = settings
         self._retriever = retriever
         self._llm = llm_client
+        # 逐句归因校验（可选）：只报告不拦截，失败不影响主流程
+        self._attribution: Optional[AttributionChecker] = build_checker(settings)
 
     # ------------------------------------------------------------------ #
     # 上下文组装
@@ -247,6 +250,18 @@ class QAEngine:
 
         used_citations, citation_warnings = self.verify_citations(result.text, citations)
         warnings.extend(citation_warnings)
+
+        # 逐句归因校验：专门抓"引用编号合法、但内容并不在被引用片段里"的幻觉。
+        # 只产出报告与 warnings，不修改 answer 正文（改正文会破坏可读性且可能误删）。
+        attribution: Optional[Dict[str, Any]] = None
+        if self._attribution is not None:
+            try:
+                report = self._attribution.check(result.text, results, citations)
+                attribution = report.to_dict()
+                warnings.extend(report.warnings)
+            except Exception as exc:  # noqa: BLE001 - 校验是增强项，失败不影响回答
+                logger.warning("归因校验失败（已跳过）：%s", exc)
+
         total_ms = int((time.perf_counter() - total_started) * 1000)
 
         usage = None
@@ -271,6 +286,7 @@ class QAEngine:
             ),
             "usage": usage,
             "warnings": warnings,
+            "attribution": attribution,
         }
 
     async def stream_answer(

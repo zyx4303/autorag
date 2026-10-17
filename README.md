@@ -29,6 +29,15 @@
 
 ![无依据时拒绝作答](docs/images/02-refusal-no-evidence.png)
 
+**③ 配套文档站**：同一套内容还拆成了 21 页的 MkDocs 站点，放在 `wiki/` 下。左侧导航 + 中文分词搜索，
+图表和字体全部本地化（断网可用），严格模式构建零警告。
+
+```bash
+cd wiki
+mkdocs serve      # http://127.0.0.1:8001 本地预览
+mkdocs build      # 生成静态站点到 wiki/site
+```
+
 > 截图里的界面就是项目内置的控制台（`http://127.0.0.1:8000/`），不是示意图。
 > 控制台支持 `?q=问题&autorun=1&shot=1` 参数自动提问并进入截图模式，例如
 > `http://127.0.0.1:8000/?shot=1&autorun=1&q=虚构车型A多久换一次机油` —— 你也可以一键复现这两张图。
@@ -224,6 +233,7 @@ AutoRAG/
 ├── docker-compose.yml
 ├── docs/
 │   └── images/                  # README 用的真实运行截图
+├── wiki/                        # MkDocs 文档站（21 页 / 7 个分组，可离线查阅）
 ├── LICENSE                      # MIT
 ├── NOTICE                       # 示例文档的来源与授权说明
 └── README.md

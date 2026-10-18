@@ -6,7 +6,7 @@ sources:
 ---
 # 混合检索与重排
 
-对应代码：`app/core/bm25.py`、`app/core/retriever.py`
+对应代码：`app/core/bm25.py`、`app/core/retriever.py`、`app/core/reranker.py`
 
 这一页是本项目技术密度最高的部分。为什么要自研 BM25？RRF 怎么融合？
 四信号重排分别解决什么问题？为什么最后说"再加权重就是过拟合"？

@@ -6,7 +6,7 @@ sources:
 ---
 # 引用校验与无依据拒答
 
-对应代码：`app/services/rag_pipeline.py`
+对应代码：`app/services/rag_pipeline.py`、`app/core/attribution.py`
 
 这是本项目最想强调的设计：**让"不确定"变得可见，而不是被模型的话术掩盖**。
 

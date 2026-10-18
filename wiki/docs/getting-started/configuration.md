@@ -1,3 +1,8 @@
+---
+sources:
+  - app/config.py
+  - .env.example
+---
 # 环境变量清单
 
 复制 `.env.example` → `.env` 后按需修改。`[待补充]` 表示**必须由你填写**的项。

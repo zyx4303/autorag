@@ -1,3 +1,9 @@
+---
+sources:
+  - app/core/chunker.py
+  - app/core/loader.py
+  - app/core/text_utils.py
+---
 # 结构感知切分
 
 对应代码：`app/core/chunker.py`、`app/core/loader.py`、`app/core/text_utils.py`

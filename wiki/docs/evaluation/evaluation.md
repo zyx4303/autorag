@@ -1,3 +1,10 @@
+---
+sources:
+  - scripts/run_eval.py
+  - scripts/make_filled_eval.py
+  - app/services/eval_service.py
+  - eval/eval_set.json
+---
 # 评测集与评测方式
 
 ## 评测集模板

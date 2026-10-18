@@ -1,3 +1,11 @@
+---
+sources:
+  - app/guard/claims.py
+  - app/guard/extractor.py
+  - app/guard/service.py
+  - app/guard/store.py
+  - app/api/routes_guard.py
+---
 # FreshGuard：知识库变更影响分析
 
 对应代码：`app/guard/`

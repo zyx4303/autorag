@@ -1,3 +1,9 @@
+---
+sources:
+  - app/api/routes_qa.py
+  - app/api/routes_ingest.py
+  - app/api/routes_system.py
+---
 # 调用示例
 
 ## `/api/v1/chat` 请求 / 响应

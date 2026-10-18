@@ -1,3 +1,11 @@
+---
+sources:
+  - app/agent/graph.py
+  - app/agent/tools.py
+  - app/agent/kb.py
+  - app/agent/service.py
+  - app/api/routes_agent.py
+---
 # LangGraph Agent：从固定 pipeline 升级为自主调用工具
 
 对应代码：`app/agent/`

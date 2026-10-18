@@ -1,3 +1,10 @@
+---
+sources:
+  - requirements.txt
+  - requirements-local.txt
+  - .env.example
+  - scripts/preflight.py
+---
 # 完整安装与配置
 
 !!! tip "已经跑通检索链路了？"

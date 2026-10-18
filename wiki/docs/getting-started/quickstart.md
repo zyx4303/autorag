@@ -1,3 +1,10 @@
+---
+sources:
+  - scripts/preflight.py
+  - scripts/ingest.py
+  - app/main.py
+  - app/api/routes_qa.py
+---
 # 5 分钟跑通检索链路
 
 不填任何 Key，先把「加载 → 切分 → 向量化 → 入库 → 混合检索」整条链路跑通。这一步**零 token 消耗**。

@@ -1,3 +1,9 @@
+---
+sources:
+  - scripts/preflight.py
+  - app/config.py
+  - app/main.py
+---
 # 排查手册
 
 报错时先看这里。

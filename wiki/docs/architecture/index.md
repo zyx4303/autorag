@@ -1,3 +1,8 @@
+---
+sources:
+  - app/main.py
+  - app/services/container.py
+---
 # 整体架构与目录结构
 
 ## 数据流一览

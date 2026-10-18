@@ -1,3 +1,9 @@
+---
+sources:
+  - tests/smoke_test.py
+  - tests/agent_smoke_test.py
+  - scripts/preflight.py
+---
 # 测试与自检
 
 项目提供两层自动化验证：**纯逻辑冒烟测试**（不联网、不需要 Key）和**环境自检脚本**。

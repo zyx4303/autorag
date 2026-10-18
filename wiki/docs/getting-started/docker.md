@@ -1,3 +1,8 @@
+---
+sources:
+  - Dockerfile
+  - docker-compose.yml
+---
 # Docker 部署
 
 ## 三步跑起来

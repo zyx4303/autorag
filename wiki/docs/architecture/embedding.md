@@ -1,3 +1,7 @@
+---
+sources:
+  - app/core/embedding.py
+---
 # Embedding 三种模式
 
 对应代码：`app/core/embedding.py`

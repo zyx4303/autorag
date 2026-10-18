@@ -1,3 +1,8 @@
+---
+sources:
+  - app/services/rag_pipeline.py
+  - app/core/attribution.py
+---
 # 引用校验与无依据拒答
 
 对应代码：`app/services/rag_pipeline.py`

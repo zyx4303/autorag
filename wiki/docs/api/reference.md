@@ -1,3 +1,13 @@
+---
+sources:
+  - app/api/routes_qa.py
+  - app/api/routes_ingest.py
+  - app/api/routes_system.py
+  - app/api/routes_eval.py
+  - app/api/routes_agent.py
+  - app/api/routes_guard.py
+  - app/models.py
+---
 # 接口一览
 
 所有业务接口前缀 `/api/v1`。

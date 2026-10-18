@@ -1,3 +1,9 @@
+---
+sources:
+  - app/core/bm25.py
+  - app/core/retriever.py
+  - app/core/reranker.py
+---
 # 混合检索与重排
 
 对应代码：`app/core/bm25.py`、`app/core/retriever.py`

@@ -1,0 +1,127 @@
+name: docs
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+    paths:
+      - "wiki/**"
+      - "scripts/check_doc_anchors.py"
+      - "scripts/doc_impact.py"
+      - ".github/workflows/docs.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: 锚点与构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: wiki/requirements-wiki.txt
+
+      - name: 检查文档锚点
+        run: python scripts/check_doc_anchors.py --list
+
+      - name: 安装文档站依赖
+        run: pip install -r wiki/requirements-wiki.txt
+
+      - name: 构建文档站（严格模式）
+        working-directory: wiki
+        run: mkdocs build --strict
+
+  impact:
+    name: 文档影响面
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 计算受影响的文档页
+        id: impact
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set +e
+          python scripts/doc_impact.py --since "origin/${BASE_REF}" > impact.txt 2>&1
+          code=$?
+          set -e
+          echo "--- 输出 ---"
+          cat impact.txt
+          echo "--- 退出码 ${code} ---"
+          echo "exit_code=${code}" >> "$GITHUB_OUTPUT"
+
+      - name: 发布或更新评论
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.number }}
+          EXIT_CODE: ${{ steps.impact.outputs.exit_code }}
+        run: |
+          {
+            echo '<!-- docs-impact -->'
+            echo '### 文档影响面'
+            echo
+            echo '由 `scripts/doc_impact.py` 按文档锚点生成，随本 PR 的改动自动更新。'
+            echo
+            echo '```text'
+            cat impact.txt
+            echo '```'
+            echo
+            case "${EXIT_CODE}" in
+              2)
+                echo '> **锚点失效。** 被引用的代码文件已被删除或改名，'
+                echo '> 请更新对应文档页 `sources`，否则这个检查会一直失败。'
+                ;;
+              3)
+                echo '> **无法计算改动范围。** 基准分支可能没有取到，'
+                echo '> 这不是"没有改动"，请检查 checkout 的 fetch-depth 与 base_ref。'
+                ;;
+              *)
+                echo '<sub>「未覆盖的改动」只是提示，不阻塞合并。</sub>'
+                ;;
+            esac
+          } > comment.md
+
+          existing=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --jq '.[] | select(.body | startswith("<!-- docs-impact -->")) | .id' | head -n1)
+
+          if [ -n "${existing}" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" \
+              -F body=@comment.md > /dev/null
+            echo "已更新评论 ${existing}"
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              -F body=@comment.md > /dev/null
+            echo "已新建评论"
+          fi
+
+      - name: 有阻断性问题则失败
+        if: steps.impact.outputs.exit_code == '2' || steps.impact.outputs.exit_code == '3'
+        env:
+          EXIT_CODE: ${{ steps.impact.outputs.exit_code }}
+        run: |
+          if [ "${EXIT_CODE}" = "2" ]; then
+            echo "::error::锚点失效：文档页引用的代码文件已不存在。"
+          else
+            echo "::error::无法计算改动范围，基准分支可能取不到。"
+          fi
+          exit 1

@@ -67,7 +67,7 @@ def git_changed(mode: str, since: str) -> list:
     out = subprocess.run(args, capture_output=True, text=True, encoding="utf-8")
     if out.returncode != 0:
         print(f"[×] git 调用失败：{out.stderr.strip()}", file=sys.stderr)
-        return []
+        return None
 
     status_by_path = {}
     for line in out.stdout.splitlines():
@@ -111,6 +111,10 @@ def main() -> int:
 
     mode = "staged" if args.staged else ("since" if args.since else "worktree")
     changes = git_changed(mode, args.since or "HEAD")
+    if changes is None:
+        # 不能当成"没有改动"返回 0：基准分支写错时，CI 会变成永远通过。
+        print("[×] 无法计算改动范围，请确认 --since 的引用是否存在。", file=sys.stderr)
+        return 3
 
     if not changes:
         print("没有检测到改动。")

@@ -4,6 +4,7 @@ sources:
   - scripts/ingest.py
   - app/main.py
   - app/api/routes_qa.py
+  - app/services/ingestion_service.py
 ---
 # 5 分钟跑通检索链路
 

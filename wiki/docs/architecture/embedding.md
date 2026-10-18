@@ -1,6 +1,7 @@
 ---
 sources:
   - app/core/embedding.py
+  - app/core/vector_store.py
 ---
 # Embedding 三种模式
 

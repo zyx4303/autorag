@@ -7,6 +7,7 @@ sources:
   - app/api/routes_agent.py
   - app/api/routes_guard.py
   - app/models.py
+  - app/api/deps.py
 ---
 # 接口一览
 

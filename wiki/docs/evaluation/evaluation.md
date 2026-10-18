@@ -1,7 +1,6 @@
 ---
 sources:
   - scripts/run_eval.py
-  - scripts/make_filled_eval.py
   - app/services/eval_service.py
   - eval/eval_set.json
 ---

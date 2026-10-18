@@ -2,6 +2,7 @@
 sources:
   - app/services/rag_pipeline.py
   - app/core/attribution.py
+  - app/core/llm_client.py
 ---
 # 引用校验与无依据拒答
 

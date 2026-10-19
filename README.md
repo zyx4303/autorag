@@ -16,7 +16,7 @@
 | 只会调 API，不懂检索？ | 向量召回 + **自研 BM25**（零依赖，中英文混合分词）→ **RRF 融合** → **多信号重排**，每一环都能单独观测 |
 | 模型瞎编参数怎么办？ | 提示词硬约束 + **服务端引用越界校验** + 无依据时**不调用模型**，三层兜底 |
 | 表格、故障码这类结构化内容会被切坏？ | Markdown 表格作为**原子块**处理，超长表按行切并**逐片重复表头** |
-| 怎么知道是不是真能跑？ | 30 项纯逻辑断言 + 启动自检脚本 + 评测脚本，全部可一条命令复现 |
+| 怎么知道是不是真能跑？ | 75 项纯逻辑断言 + 启动自检脚本 + 评测脚本，全部可一条命令复现 |
 | 遇到问题怎么定位？ | `/retrieve` 只做检索不花 token；响应里带 `latency` 拆解与 `warnings` |
 
 **效果示例**（以下为真实运行截图，基于仓库内 `data/documents/` 的示例数据集）
@@ -95,7 +95,7 @@ pip install -r requirements.txt
 # 2) 准备配置并自检（默认 EMBEDDING_PROVIDER=hash，无需任何 Key）
 copy .env.example .env               # Linux/macOS: cp .env.example .env
 python scripts/preflight.py          # 期望：阻塞项 0 / 问题项 0
-python tests/smoke_test.py           # 期望：通过 30 项 / 失败 0 项
+python tests/smoke_test.py           # 期望：通过 75 项 / 失败 0 项
 
 # 3) 启动并入库示例知识库
 uvicorn app.main:app --reload --port 8000
@@ -258,7 +258,7 @@ AutoRAG/
 | 验证项 | 命令 | 期望结果 |
 | --- | --- | --- |
 | 环境与配置 | `python scripts/preflight.py` | 阻塞项 0、问题项 0 |
-| 纯逻辑正确性 | `python tests/smoke_test.py` | 通过 30 项、失败 0 项 |
+| 纯逻辑正确性 | `python tests/smoke_test.py` | 通过 75 项、失败 0 项 |
 | 入库 | `python scripts/ingest.py --rebuild` | `indexed=6`、`total_chunks_in_store=87` |
 | 召回（零 token） | 见下方 curl | 返回结果里同时带 `vector_score` 与 `keyword_score` |
 | 批量召回评测（零 token） | `python scripts/run_eval.py --mode retrieve` | 跑通并生成 JSON + Markdown 报告 |
@@ -717,7 +717,7 @@ python scripts/preflight.py --ping-llm # 额外真实探测一次 LLM，约 1 to
 ## 11. 冒烟测试（可选）
 
 ```bash
-python tests/smoke_test.py        # 30 项纯逻辑断言，不联网、不需要 Key、不调用大模型
+python tests/smoke_test.py        # 75 项纯逻辑断言，不联网、不需要 Key、不调用大模型
 python scripts/preflight.py       # 环境与配置自检（见 9.0 节）
 ```
 
@@ -736,7 +736,7 @@ python scripts/preflight.py       # 环境与配置自检（见 9.0 节）
 | --- | --- | --- |
 | 依赖安装 | Windows / Python 3.13.9 / venv | 成功，装到 chromadb 1.5.9、fastapi 0.142.2、pydantic 2.13.5 |
 | `scripts/preflight.py` | `EMBEDDING_PROVIDER=hash` | 阻塞项 0、问题项 0 |
-| `tests/smoke_test.py` | 同上 | 通过 30 项、失败 0 项 |
+| `tests/smoke_test.py` | 同上 | 通过 75 项、失败 0 项 |
 | 入库（首次） | 1 个占位示例文档 | `indexed=1`、`total_chunks_in_store=2`、服务端耗时 95ms |
 | `/api/v1/retrieve` | `hybrid`，query="保养周期 首保 机油" | 2 条结果，均带 `vector_score` 与 `keyword_score` 双通道标记 |
 | `/api/v1/chat` | 真实调用 DeepSeek | 返回带 `[1]` 引用的回答 + `依据：` 行，`warnings` 为空；usage 817+145 tokens |
@@ -1011,8 +1011,8 @@ curl http://127.0.0.1:8000/api/v1/agent/tools    # 四个工具的完整 JSON sc
 | 迭代上限 | 脚本化测试中模型连续 20 轮要求调用工具，图在第 6 轮停止并给出摘要 |
 | 工具报错 | `lookup_dtc(P9999)` 未命中后，模型改用 `keyword` 参数重试成功（未崩溃） |
 
-测试规模：原有 `tests/smoke_test.py` **68 项**（含新增的 Agent schema 不变量）、
-新增 `tests/agent_smoke_test.py` **79 项**（覆盖工具链、追问、上限、错误恢复、JSON 容错）。
+测试规模：`tests/smoke_test.py` **75 项**（含 Agent schema 不变量）、
+新增 `tests/agent_smoke_test.py` **86 项**（覆盖工具链、追问、上限、错误恢复、JSON 容错）。
 
 ### 14.6 已知失败样例与 AI 辅助边界
 
@@ -1044,7 +1044,7 @@ curl http://127.0.0.1:8000/api/v1/agent/tools    # 四个工具的完整 JSON sc
   代码结构留好了 SQLite 接口，但要接真实车型数据仍需替换数据源。
 
 **AI 辅助开发边界**：状态图结构、工具 schema 描述、停止条件与容错策略由人设计；
-示例码表解析、正则与样板代码有 AI 辅助生成，全部逻辑经人工复核并由 79 项确定性测试覆盖。
+示例码表解析、正则与样板代码有 AI 辅助生成，全部逻辑经人工复核并由 86 项确定性测试覆盖。
 
 ---
 

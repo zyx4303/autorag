@@ -16,7 +16,7 @@ note: 实测快照，记录某次真实执行的结果，不允许随代码自�
 | --- | --- | --- |
 | 依赖安装 | Windows / Python 3.13.9 / venv | 成功，装到 chromadb 1.5.9、fastapi 0.142.2、pydantic 2.13.5 |
 | `scripts/preflight.py` | `EMBEDDING_PROVIDER=hash` | 阻塞项 0、问题项 0 |
-| `tests/smoke_test.py` | 同上 | 通过 30 项、失败 0 项 |
+| `tests/smoke_test.py` | 同上 | 通过 75 项、失败 0 项 |
 | 入库（首次） | 1 个占位示例文档 | `indexed=1`、`total_chunks_in_store=2`、服务端耗时 95ms |
 | `/api/v1/retrieve` | `hybrid`，query="保养周期 首保 机油" | 2 条结果，均带 `vector_score` 与 `keyword_score` 双通道标记 |
 | `/api/v1/chat` | 真实调用 DeepSeek | 返回带 `[1]` 引用的回答 + `依据：` 行，`warnings` 为空；usage 817+145 tokens |

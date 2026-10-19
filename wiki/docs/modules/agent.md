@@ -151,8 +151,8 @@ curl http://127.0.0.1:8000/api/v1/agent/tools    # 四个工具的完整 JSON sc
 | 迭代上限 | 脚本化测试中模型连续 20 轮要求调用工具，图在第 6 轮停止并给出摘要 |
 | 工具报错 | `lookup_dtc(P9999)` 未命中后，模型改用 `keyword` 参数重试成功（未崩溃） |
 
-**测试规模**：原有 `tests/smoke_test.py` **68 项**（含新增的 Agent schema 不变量）+
-新增 `tests/agent_smoke_test.py` **79 项**（覆盖工具链、追问、上限、错误恢复、JSON 容错）。
+**测试规模**：原有 `tests/smoke_test.py` **75 项**（含新增的 Agent schema 不变量）+
+新增 `tests/agent_smoke_test.py` **86 项**（覆盖工具链、追问、上限、错误恢复、JSON 容错）。
 
 ---
 
@@ -198,4 +198,4 @@ curl http://127.0.0.1:8000/api/v1/agent/tools    # 四个工具的完整 JSON sc
 
 **有 AI 辅助生成**：示例码表解析、正则与样板代码。
 
-**全部逻辑经人工复核**，并由 79 项确定性测试覆盖。
+**全部逻辑经人工复核**，并由 86 项确定性测试覆盖。

@@ -13,8 +13,8 @@ sources:
 ## 冒烟测试
 
 ```bash
-python tests/smoke_test.py        # 30 项纯逻辑断言，不联网、不需要 Key、不调用大模型
-python tests/agent_smoke_test.py  # Agent 专项（79 项）
+python tests/smoke_test.py        # 75 项纯逻辑断言，不联网、不需要 Key、不调用大模型
+python tests/agent_smoke_test.py  # Agent 专项（86 项）
 python scripts/preflight.py       # 环境与配置自检
 ```
 
@@ -29,13 +29,13 @@ python scripts/preflight.py       # 环境与配置自检
 | 引用 | 引用越界校验 |
 | Embedding | hash embedder 的维度与可复现性 |
 
-### `tests/agent_smoke_test.py`（79 项）
+### `tests/agent_smoke_test.py`（86 项）
 
 覆盖工具链、追问、迭代上限、错误恢复、JSON 容错。
 
 !!! note "测试规模会随迭代增长"
-    Agent 模块上线后，原 `tests/smoke_test.py` 扩展为 **68 项**
-    （含新增的 Agent schema 不变量），并新增独立的 `tests/agent_smoke_test.py` **79 项**。
+    Agent 模块上线后，原 `tests/smoke_test.py` 扩展为 **75 项**
+    （含新增的 Agent schema 不变量），并新增独立的 `tests/agent_smoke_test.py` **86 项**。
 
 ---
 

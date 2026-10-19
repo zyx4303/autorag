@@ -21,7 +21,7 @@ pip install -r requirements.txt
 # 2) 准备配置并自检（默认 EMBEDDING_PROVIDER=hash，无需任何 Key）
 copy .env.example .env               # Linux/macOS: cp .env.example .env
 python scripts/preflight.py          # 期望：阻塞项 0 / 问题项 0
-python tests/smoke_test.py           # 期望：通过 30 项 / 失败 0 项
+python tests/smoke_test.py           # 期望：通过 75 项 / 失败 0 项
 
 # 3) 启动并入库示例知识库
 uvicorn app.main:app --reload --port 8000
@@ -52,7 +52,7 @@ python scripts/run_eval.py --limit 5
 | 验证项 | 命令 | 期望结果 |
 | --- | --- | --- |
 | 环境与配置 | `python scripts/preflight.py` | 阻塞项 0、问题项 0 |
-| 纯逻辑正确性 | `python tests/smoke_test.py` | 通过 30 项、失败 0 项 |
+| 纯逻辑正确性 | `python tests/smoke_test.py` | 通过 75 项、失败 0 项 |
 | 入库 | `python scripts/ingest.py --rebuild` | `indexed=6`、`total_chunks_in_store=87` |
 | 召回（零 token） | 见下方 curl | 返回结果里同时带 `vector_score` 与 `keyword_score` |
 | 批量召回评测（零 token） | `python scripts/run_eval.py --mode retrieve` | 跑通并生成 JSON + Markdown 报告 |

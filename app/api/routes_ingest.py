@@ -8,10 +8,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, Dict
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile, status
 
-from app.api.deps import ServiceContainer, get_container, get_ingestion, verify_api_key
+from app.api.deps import (
+    ServiceContainer,
+    get_container,
+    get_ingest_jobs,
+    get_ingestion,
+    verify_api_key,
+)
 from app.core.loader import SUPPORTED_SUFFIXES
 from app.logging_conf import get_logger
 from app.models import IngestRequest, IngestResponse, UploadResponse
@@ -22,23 +29,72 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
 
-@router.post("", response_model=IngestResponse, summary="扫描 data/documents 并增量入库")
+@router.post("", summary="扫描 data/documents 并增量入库（同步或异步）")
 async def ingest(
     payload: IngestRequest = Body(default_factory=IngestRequest),
     ingestion: IngestionService = Depends(get_ingestion),
+    jobs: Any = Depends(get_ingest_jobs),
     _: None = Depends(verify_api_key),
-) -> IngestResponse:
+) -> Dict[str, Any]:
     """把知识库目录里的文档切分、向量化并写入 Chroma，然后重建 BM25 索引。
 
     - 首次使用传 `{"rebuild": true}` 可以从零干净重建；
     - 日常增量直接传 `{}`，未变更文件会返回 status=skipped；
-    - 只调试某几个文件时用 `{"paths": ["保养手册.md"]}`。
+    - 只调试某几个文件时用 `{"paths": ["保养手册.md"]}`；
+    - `{"async_mode": true}` 立即返回 `{"job_id", "status", "status_url"}`，
+      进度与结果查 `GET /api/v1/ingest/status/{job_id}`（大语料推荐）。
+
+    两种模式的响应结构不同（异步是任务受理，同步是完整结果），
+    客户端按请求参数区分。
     """
-    return await ingestion.ingest(
+    # 两种模式的响应结构不同（异步是任务受理，同步是完整结果），
+    # 客户端按请求参数区分。
+    # 注意必须返回 dict 而不是模型实例：返回注解 Dict[str, Any] 会被
+    # FastAPI 当作响应模型校验，模型实例过不了（实测踩过）。
+    if payload.async_mode:
+        try:
+            accepted = jobs.start(
+                ingestion,
+                rebuild=payload.rebuild,
+                reset_registry=payload.reset_registry,
+                only_sources=payload.paths,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+            ) from exc
+        accepted["status_url"] = f"/api/v1/ingest/status/{accepted['job_id']}"
+        return accepted
+
+    response = await ingestion.ingest(
         rebuild=payload.rebuild,
         reset_registry=payload.reset_registry,
         only_sources=payload.paths,
     )
+    return response.model_dump()
+
+
+@router.get("/jobs", summary="列出最近的入库任务（按提交时间倒序）")
+async def list_ingest_jobs(
+    jobs: Any = Depends(get_ingest_jobs),
+    _: None = Depends(verify_api_key),
+) -> Dict[str, Any]:
+    return {"running_job_id": jobs.running_job_id, "jobs": jobs.list_jobs()}
+
+
+@router.get("/status/{job_id}", summary="查询入库任务的进度与结果")
+async def ingest_job_status(
+    job_id: str,
+    jobs: Any = Depends(get_ingest_jobs),
+    _: None = Depends(verify_api_key),
+) -> Dict[str, Any]:
+    job = jobs.status(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"任务不存在：{job_id}（任务记录在进程重启后会丢失）",
+        )
+    return job
 
 
 @router.post("/upload", response_model=UploadResponse, summary="上传单个文档到知识库目录")

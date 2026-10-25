@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Set, Tupl
 
 from app.config import Settings
 from app.core.bm25 import BM25Index
-from app.core.text_utils import make_snippet, tokenize
+from app.core.text_utils import build_context_text, make_snippet, tokenize
 from app.core.vector_store import VectorStore
 from app.logging_conf import get_logger
 from app.models import RetrievedChunk
@@ -25,6 +25,19 @@ if TYPE_CHECKING:  # 仅类型标注用，避免运行期循环导入
     from app.core.reranker import CrossEncoderReranker
 
 logger = get_logger(__name__)
+
+# 重排各信号的权重。单独提成常量有两个原因：
+# 1. 调参只改这一处，不用在表达式里找；
+# 2. 离线调参脚本可以 import 它做基线对比。
+# ⚠️ 注意量纲：fusion 是 0.0x，其余五个是 0~1。名义权重 ≠ 实际贡献，见 _rerank 注释。
+RERANK_WEIGHTS: Dict[str, float] = {
+    "fusion": 0.54,
+    "coverage": 0.12,
+    "precision": 0.12,
+    "cjk": 0.08,
+    "section": 0.08,
+    "phrase": 0.06,
+}
 
 VALID_MODES = {"vector", "keyword", "hybrid"}
 
@@ -82,6 +95,10 @@ class HybridRetriever:
         return [(item, float(item.get("vector_score", 0.0))) for item in items]
 
     def _keyword_recall(self, query: str, candidate_k: int) -> List[Tuple[Dict[str, Any], float]]:
+        # 曾经在这里做过同义扩展（首保 → 首次保养 / 第 1 次保养），见 README 12.14。
+        # 结论：BM25 上确实把目标片段从第 6 拉到第 2（分数 7.3 → 24.26），
+        # 但**端到端排名一点没变** —— rrf_k=60 把名次差压平了，
+        # 两路融合分只差 0.0008，再乘 0.54 权重后可以忽略。所以回退。
         return self._bm25.search(query, top_k=candidate_k)
 
     # ------------------------------------------------------------------ #
@@ -158,15 +175,28 @@ class HybridRetriever:
 
         for item in candidates:
             text = str(item.get("text", ""))
-            coverage = self._weighted_token_coverage(query_tokens, text)
+            # 词面类信号（覆盖 / 高精度串 / 中文词组 / 整句）一律用「章节 + 正文」计算。
+            #
+            # 为什么必须这样（实测，2026-10-25）：纯表格片段 `| 第 1 次 | 16 | 12 |` 的
+            # fusion_score 其实是全场最高（0.0206 vs 第 10 名 0.0193），但最终只排第 11。
+            # 原因就在这个函数：融合分只占 0.54 权重，另外 0.46 全是词面匹配，
+            # 而表格正文里没有任何查询词，这一半几乎拿零分。
+            # 加上章节路径（含「保养」「里程」「时间」）后，这批片段才有公平的起点。
+            # 引用展示与归因仍用原文，不受影响。
+            index_text = build_context_text(text, str(item.get("section", "")))
+            # 存下来给 cross-encoder 用：它默认只看原文（text_key="text"），
+            # 看不到章节路径与别称 —— 12.14/12.24 两次「BM25 进步被精排覆盖」
+            # 的根因都在这里。别称是词典级真相，喂给语义模型是合法信息。
+            item["index_text"] = index_text
+            coverage = self._weighted_token_coverage(query_tokens, index_text)
             phrase_bonus = 0.0
-            if flat_query and flat_query in " ".join(text.split()):
+            if flat_query and flat_query in " ".join(index_text.split()):
                 phrase_bonus = 1.0
-            elif len(query) >= 4 and query.strip() in text:
+            elif len(query) >= 4 and query.strip() in index_text:
                 phrase_bonus = 1.0
 
             # 高精度 token 命中比例：P0420 这类串命中一条就该被明显提权
-            text_tokens = set(tokenize(text))
+            text_tokens = set(tokenize(index_text))
             if precision_tokens:
                 precision_hits = len(precision_tokens & text_tokens) / len(precision_tokens)
             else:
@@ -174,7 +204,7 @@ class HybridRetriever:
 
             # 中文词组兜底：查询里的中文词若以连续字符形式出现在片段中，也算命中
             if query_bigrams and query_cjk_terms:
-                text_bigrams = self._cjk_bigrams(text)
+                text_bigrams = self._cjk_bigrams(index_text)
                 matched_terms = 0
                 for term in query_cjk_terms:
                     term_pairs = {
@@ -200,16 +230,21 @@ class HybridRetriever:
             item["precision_hits"] = round(precision_hits, 4)
             item["cjk_hits"] = round(cjk_hits, 4)
             item["section_hits"] = round(section_coverage, 4)
-            # 权重含义：0.54 融合分，0.12 词覆盖，0.12 高精度串，0.08 中文词组，
-            #          0.08 章节命中，0.06 整句命中
+
+            # 六个信号分别留底，便于核对「名义权重」与「实际贡献」。
+            # 两者量纲差一个数量级：融合分是 0.0x，其余是 0~1，
+            # 所以名义上占 0.54 的融合分，实际贡献可能只有 15%。
+            signals = {
+                "fusion": float(item.get("fusion_score", 0.0) or 0.0),
+                "coverage": coverage,
+                "precision": precision_hits,
+                "cjk": cjk_hits,
+                "section": section_coverage,
+                "phrase": phrase_bonus,
+            }
+            item["signals"] = {key: round(value, 6) for key, value in signals.items()}
             item["score"] = round(
-                0.54 * float(item.get("fusion_score", 0.0))
-                + 0.12 * coverage
-                + 0.12 * precision_hits
-                + 0.08 * cjk_hits
-                + 0.08 * section_coverage
-                + 0.06 * phrase_bonus,
-                6,
+                sum(RERANK_WEIGHTS[key] * value for key, value in signals.items()), 6
             )
         return sorted(candidates, key=lambda item: item["score"], reverse=True)
 
@@ -311,7 +346,10 @@ class HybridRetriever:
         # 精排要看到足够大的候选池，否则排在后面的正确答案没有机会被救回来。
         if self._reranker is not None:
             fused = await self._reranker.rerank(
-                query, fused, top_n=int(self._settings.rerank_top_n)
+                query,
+                fused,
+                top_n=int(self._settings.rerank_top_n),
+                text_key="index_text",
             )
 
         results: List[RetrievedChunk] = []
@@ -332,6 +370,8 @@ class HybridRetriever:
                     keyword_score=item.get("keyword_score"),
                     rerank_score=item.get("rerank_score"),
                     heuristic_score=item.get("heuristic_score"),
+                    fusion_score=item.get("fusion_score"),
+                    signals=item.get("signals") or {},
                     from_vector=bool(item.get("from_vector")),
                     from_keyword=bool(item.get("from_keyword")),
                 )
@@ -342,7 +382,17 @@ class HybridRetriever:
     # 调试视图
     # ------------------------------------------------------------------ #
     @staticmethod
-    def to_debug(results: Sequence[RetrievedChunk], snippet_chars: int = 160) -> List[Dict[str, Any]]:
+    def to_debug(
+        results: Sequence[RetrievedChunk],
+        snippet_chars: int = 160,
+        include_text: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """转成调试用的结构。
+
+        `include_text=False` 时只返回 160 字摘要（默认行为，避免普通问答响应变大）。
+        评测需要完整正文：判断「关键短语是否出现在该片段里」必须看全文，
+        只看前 160 字会把正文后半段的关键句漏掉，导致 recall 被人为压低。
+        """
         return [
             {
                 "rank": index + 1,
@@ -362,7 +412,10 @@ class HybridRetriever:
                 "from_keyword": item.from_keyword,
                 "rerank_score": item.rerank_score,
                 "heuristic_score": item.heuristic_score,
+                "fusion_score": item.fusion_score,
+                "signals": item.signals,
                 "snippet": make_snippet(item.text, snippet_chars),
+                "text": (item.text or "") if include_text else "",
             }
             for index, item in enumerate(results)
         ]

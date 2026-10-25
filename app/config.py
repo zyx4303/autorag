@@ -45,6 +45,17 @@ def _env_float(key: str, default: float) -> float:
         return default
 
 
+def _env_float_or_none(key: str) -> Optional[float]:
+    """读一个可选的浮点环境变量；未配置或非法时返回 None（区别于「配了 0」）。"""
+    raw = _env_str(key)
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 def _env_bool(key: str, default: bool) -> bool:
     raw = _env_str(key).lower()
     if not raw:
@@ -104,7 +115,13 @@ class Settings(BaseModel):
         default_factory=lambda: _env_float("LLM_TIMEOUT_SECONDS", 60.0)
     )
     llm_max_retries: int = Field(default_factory=lambda: _env_int("LLM_MAX_RETRIES", 3))
-    llm_temperature: float = Field(default_factory=lambda: _env_float("LLM_TEMPERATURE", 0.2))
+    llm_temperature: float = Field(
+        default_factory=lambda: _env_float("LLM_TEMPERATURE", 0.0),
+        description=(
+            "LLM 采样温度。事实型 RAG 默认 0：实测（12.26，3 轮×20 条）把"
+            " faithfulness 的极差从 0.13 收窄到 0.018，评测与线上回答都更稳定。"
+        ),
+    )
     llm_max_tokens: int = Field(default_factory=lambda: _env_int("LLM_MAX_TOKENS", 1024))
 
     # ---- Embedding ----
@@ -162,6 +179,54 @@ class Settings(BaseModel):
     chunk_overlap: int = Field(default_factory=lambda: _env_int("CHUNK_OVERLAP", 80))
     chunk_min_chars: int = Field(default_factory=lambda: _env_int("CHUNK_MIN_CHARS", 80))
 
+    # ---- 多轮会话（L4）----
+    # Agent 链路早就有 session_id + checkpoint，主 /chat 链路的 session_id
+    # 一直是预留字段。这里补上：历史轮数上限 + 是否做查询改写。
+    session_max_turns: int = Field(
+        default_factory=lambda: _env_int("SESSION_MAX_TURNS", 6),
+        description="每个会话最多保留的问答轮数，旧轮次直接丢弃（不摘要）",
+    )
+    session_max_sessions: int = Field(
+        default_factory=lambda: _env_int("SESSION_MAX_SESSIONS", 512),
+        description=(
+            "最多同时保留多少个会话的历史，超过后淘汰最早创建的会话。"
+            "会话历史是常驻进程里的内存结构，没有上限就是慢泄漏。"
+        ),
+    )
+
+    # ---- 查询缓存（L5）----
+    # 缓存的正确性边界见 app/services/query_cache.py：
+    # 键里带索引版本（入库即失效）；多轮与 debug 请求不缓存。
+    query_cache_enabled: bool = Field(
+        default_factory=lambda: _env_bool("QUERY_CACHE_ENABLED", True),
+        description="是否启用查询缓存（同样的问题直接返回上次回答）",
+    )
+    query_cache_ttl_seconds: int = Field(
+        default_factory=lambda: _env_int("QUERY_CACHE_TTL_SECONDS", 3600),
+        description="缓存条目的存活时间（秒）。索引变更会立即失效，TTL 只是兜底",
+    )
+    query_cache_max_entries: int = Field(
+        default_factory=lambda: _env_int("QUERY_CACHE_MAX_ENTRIES", 256),
+        description="缓存最大条目数（LRU 淘汰）",
+    )
+
+    # ---- 成本估算（L5）：价格是会变的商业数据，默认不配置就不估算 ----
+    llm_price_prompt_per_m: Optional[float] = Field(
+        default_factory=lambda: _env_float_or_none("LLM_PRICE_PROMPT_PER_M"),
+        description="每百万 prompt token 单价（元）；配置后 /stats 才输出成本估算",
+    )
+    llm_price_completion_per_m: Optional[float] = Field(
+        default_factory=lambda: _env_float_or_none("LLM_PRICE_COMPLETION_PER_M"),
+        description="每百万 completion token 单价（元）",
+    )
+    query_rewrite_enabled: bool = Field(
+        default_factory=lambda: _env_bool("QUERY_REWRITE_ENABLED", True),
+        description=(
+            "有历史时是否用 LLM 把追问改写成独立问题（指代消解）。"
+            "改写失败会回退为原问题，不影响可用性。"
+        ),
+    )
+
     # ---- 检索 ----
     retrieval_mode: str = Field(
         default_factory=lambda: (_env_str("RETRIEVAL_MODE", "hybrid").lower() or "hybrid")
@@ -174,6 +239,25 @@ class Settings(BaseModel):
     min_score: float = Field(default_factory=lambda: _env_float("MIN_SCORE", 0.05))
     refuse_when_empty: bool = Field(default_factory=lambda: _env_bool("REFUSE_WHEN_EMPTY", True))
 
+    # ---- 拒答加固（不依赖模型是否"听话"）----
+    # 背景：实测 6 条负样本的 refused 全是 false —— 检索非空，没走"检索为空就拒答"那条硬规则，
+    # 是模型自己遵守提示词说了"未找到"。这意味着换模型/改提示词，拒答可能悄悄失效而指标看不出来。
+    # 下面两个阈值给拒答加两道服务端兜底，与模型无关。
+    refusal_evidence_floor: float = Field(
+        default_factory=lambda: _env_float("REFUSAL_EVIDENCE_FLOOR", 0.01),
+        description=(
+            "最高召回分低于此值即视为无证据，不调用模型直接拒答。"
+            "0 表示关闭。hybrid 下的融合分是 0.0x 量级，与 vector 模式的余弦不同量纲，故单独配置。"
+        ),
+    )
+    refusal_unsupported_ratio: float = Field(
+        default_factory=lambda: _env_float("REFUSAL_UNSUPPORTED_RATIO", 0.5),
+        description=(
+            "生成后若「找不到依据的句子」占比达到此值（且至少 2 句），判定为编造并把回答改为拒答。"
+            "0 表示关闭。只看 unsupported，不看 no_citation —— 后者是格式问题不是幻觉。"
+        ),
+    )
+
     # ---- 精排（cross-encoder，可选）----
     # 启发式重排已到极限（见 app/core/retriever.py 的注释与实测记录），
     # 精排用 (query, passage) 联合编码判断语义相关性，能纠正"字面匹配但语义无关"的排序错误。
@@ -184,6 +268,14 @@ class Settings(BaseModel):
     )
     rerank_top_n: int = Field(default_factory=lambda: _env_int("RERANK_TOP_N", 20))
     rerank_device: str = Field(default_factory=lambda: _env_str("RERANK_DEVICE", "cpu"))
+    rerank_quantize: bool = Field(
+        default_factory=lambda: _env_bool("RERANK_QUANTIZE", True),
+        description=(
+            "对精排模型做 int8 动态量化（Linear 层）。实测：CPU 上 2491ms → 885ms（-64%），"
+            "top-8 成员集与 fp32 100% 一致、分数平均偏差 0.010，检索指标在噪声内。"
+            "关闭可回到 fp32 全精度。"
+        ),
+    )
     rerank_max_length: int = Field(
         default_factory=lambda: _env_int("RERANK_MAX_LENGTH", 512)
     )
@@ -379,6 +471,19 @@ class Settings(BaseModel):
             "documents_dir": str(self.documents_dir),
             "chroma_dir": str(self.chroma_dir),
             "api_auth_enabled": not is_placeholder(self.api_key),
+            # 多轮会话与拒答兜底：换模型/改配置后，/health 一眼能看出这些开关的状态
+            "session_max_turns": self.session_max_turns,
+            "session_max_sessions": self.session_max_sessions,
+            "query_rewrite_enabled": self.query_rewrite_enabled,
+            "query_cache_enabled": self.query_cache_enabled,
+            "query_cache_ttl_seconds": self.query_cache_ttl_seconds,
+            "query_cache_max_entries": self.query_cache_max_entries,
+            "cost_estimation_enabled": (
+                self.llm_price_prompt_per_m is not None
+                and self.llm_price_completion_per_m is not None
+            ),
+            "refusal_evidence_floor": self.refusal_evidence_floor,
+            "refusal_unsupported_ratio": self.refusal_unsupported_ratio,
             "missing_required": self.missing_required(),
         }
 

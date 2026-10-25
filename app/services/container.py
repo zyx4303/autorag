@@ -86,9 +86,48 @@ def build_container(settings: Settings) -> ServiceContainer:
             container.bm25,
             reranker=container.reranker,
         )
-        container.ingestion = IngestionService(settings, container.vector_store, container.bm25)
-        container.qa = QAEngine(settings, container.retriever, container.llm)
+        # 查询缓存 + 索引版本：入库后版本自增，缓存随之失效（见 query_cache 模块文档）
+        from app.services.index_state import IndexState
+        from app.services.query_cache import QueryCache
+        from app.services.session_store import ConversationStore
+
+        container.index_state = IndexState()
+        container.query_cache = QueryCache(
+            max_entries=settings.query_cache_max_entries,
+            ttl_seconds=settings.query_cache_ttl_seconds,
+        )
+        if not settings.query_cache_enabled:
+            # 开关关闭时不装配缓存对象 —— QAEngine 判 None 直接跳过，零开销
+            container.query_cache = None
+        container.ingestion = IngestionService(
+            settings,
+            container.vector_store,
+            container.bm25,
+            index_state=container.index_state,
+        )
+        container.session_store = ConversationStore(
+            max_turns=settings.session_max_turns, max_sessions=settings.session_max_sessions
+        )
+        # 请求指标采集：必须在 QAEngine 之前装配——
+        # 实测踩过：先建 QAEngine（metrics=None）后建采集器，chat 记录全部静默丢失
+        from app.services.metrics_collector import RequestMetricsCollector
+
+        container.metrics = RequestMetricsCollector()
+        container.qa = QAEngine(
+            settings,
+            container.retriever,
+            container.llm,
+            session_store=container.session_store,
+            query_cache=container.query_cache,
+            index_state=container.index_state,
+            metrics=container.metrics,
+        )
         container.evaluation = EvaluationService(settings, container.qa)
+
+        # 异步入库任务管理：POST /ingest?async_mode=true 提交，GET /ingest/status 查询
+        from app.services.ingestion_jobs import IngestJobManager
+
+        container.ingest_jobs = IngestJobManager()
 
         # BM25 索引：优先从磁盘加载，缺失或与向量库条数不符时重建
         loaded = container.bm25.load()

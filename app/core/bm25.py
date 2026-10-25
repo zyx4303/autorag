@@ -17,7 +17,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from app.core.text_utils import tokenize
+from app.core.text_utils import build_context_text, tokenize
 from app.logging_conf import get_logger
 
 logger = get_logger(__name__)
@@ -91,7 +91,10 @@ class BM25Index:
 
             for item in chunks:
                 text = str(item.get("text") or "")
-                tokens = tokenize(text)
+                # 分词用「章节路径 + 正文」，但存的 text 仍是原文（见 text_utils.build_context_text）
+                tokens = tokenize(
+                    build_context_text(text, str(item.get("section") or ""))
+                )
                 if not tokens:
                     continue
                 counts = Counter(tokens)
@@ -179,7 +182,10 @@ class BM25Index:
             self._doc_freq = Counter()
             for item in chunks:
                 text = str(item.get("text") or "")
-                tokens = tokenize(text)
+                # 与 build 保持完全一致的索引文本，否则落盘再加载会得到不同的分词
+                tokens = tokenize(
+                    build_context_text(text, str(item.get("section") or ""))
+                )
                 if not tokens:
                     continue
                 self._chunks.append(item)

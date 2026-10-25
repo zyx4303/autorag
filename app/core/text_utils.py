@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Dict, List
+
+from app.core.aliases import alias_line
+from typing import Dict, List, Optional
 
 # 中英文句末标点（保留标点）
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[。！？!?；;])|(?<=\.)\s+")
@@ -110,3 +112,68 @@ def char_ngrams(text: str, sizes: tuple = (2, 3)) -> Dict[str, int]:
                 continue
             counts[gram] = counts.get(gram, 0) + 1
     return counts
+
+
+def build_context_text(text: str, *contexts: Optional[str], with_aliases: bool = True) -> str:
+    """把上下文（文档标题 / 章节路径）拼在正文前，用于**索引**而非展示。
+
+    解决什么
+    --------
+    表格类内容被切成纯数据块后，会彻底失去语义锚点。实测片段
+    `| 第 1 次 | 16 | 12 |`（118 字）里没有「首保」「保养」「里程」中的任何一个词，
+    用户问「首保多少公里」时它 BM25 完全排不进结果，虽然向量能勉强找到（余弦全场最高）。
+
+    把章节路径（如「二、定期保养项目表（按里程 / 时间，以先到者为准）」）拼在正文前，
+    向量与词面检索就都能看到「保养」「里程」「时间」这些线索。
+
+    为什么用「；」连接而不是直接空格：多个上下文之间需要边界，
+    否则「…项目表」+「…」拼接后会产生跨边界的中文 bigram 噪声。
+
+    别称注入（12.24 之后的第二步，见 aliases 模块）
+    ------------------------------------------------
+    章节路径解决的是「没有语义锚点」，解决不了**词汇鸿沟**：
+    文档写「第 1 次」、用户说「首保」，两词零交集。这里按 aliases.py 的
+    词表把命中片段的别称追加成一行（「（同义表述：首保）」），
+    BM25 / 向量 / 精排 / 归因的校验面就都能看到用户的说法。
+    别称必须是词表里可举证的同义词；片段正文与引用展示不受影响。
+
+    重要：本函数只用于**构造索引文本**。Chroma 里 `documents` 仍存原文，
+    引用展示与片段摘要不受影响；逐句归因的校验面**包含**章节路径与别称
+    ——它们都是「词典级真相」，真话（首保=第 1 次保养）不该被误判成幻觉。
+    """
+    parts = [str(item).strip() for item in contexts if item and str(item).strip()]
+    if with_aliases:
+        # 别称判定看「上下文 + 正文」整体：Q001 的目标片段是纯表格
+        # （「第 1 次 | 16 | 12」正文里没有「保养」二字，别称要求会落空），
+        # 但它的章节路径「定期保养项目表」有 —— 两者合并才算得准。
+        line = alias_line("\n".join(parts + [text]))
+        if line:
+            parts.append(line)
+    if not parts:
+        return text
+    return "；".join(parts) + "\n" + text
+
+
+_HR_LINE_RE = re.compile(r"^\s*([-*_])(?:\s*\1){2,}\s*$")
+
+
+def strip_markdown_rules(text: str) -> str:
+    """去掉 Markdown 的水平分割线（`---` / `***` / `___` 独占一行）。
+
+    为什么必须在切分前去掉
+    ----------------------
+    分割线没有任何语义，但它会把切分边界带歪。实测（2026-10-25）：
+
+    文档里 `## 五、保修与三包要点` 前面有一行 `---`。切分时这行被当成
+    **上一章节（四、故障码速查）** 的正文保留下来，随后打包装箱时
+    又把章节五的段落并了进来 —— 最终这个片段的 `section` 标成了「四」，
+    正文却是章节五的内容。79 个片段里有 4 个是这种错配。
+
+    这在只看正文时无伤大雅，但上下文增强会把 `section` 拼进索引文本
+    （见 build_context_text），错标签等于往检索里灌错语义。
+
+    只删「独占一行且由同一个 -/*/ _ 重复至少 3 次」的行，
+    不会碰到表格分隔行（`|---|`）和列表项（`- 项目`）。
+    """
+    lines = [line for line in (text or "").split("\n") if not _HR_LINE_RE.match(line)]
+    return "\n".join(lines)

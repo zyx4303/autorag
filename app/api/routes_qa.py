@@ -10,12 +10,21 @@ from __future__ import annotations
 
 import json
 import time
-from typing import AsyncIterator, List
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
-from app.api.deps import ServiceContainer, get_container, get_qa, get_vector_store, verify_api_key
+from app.api.deps import (
+    ServiceContainer,
+    get_container,
+    get_metrics,
+    get_qa,
+    get_session_store,
+    get_vector_store,
+    verify_api_key,
+)
 from app.core.retriever import VALID_MODES, HybridRetriever
 from app.core.vector_store import VectorStore
 from app.models import (
@@ -41,17 +50,23 @@ def _validate_mode(mode: str | None) -> None:
 async def retrieve(
     payload: RetrieveRequest,
     qa: QAEngine = Depends(get_qa),
+    metrics: Any = Depends(get_metrics),
     _: None = Depends(verify_api_key),
 ) -> RetrieveResponse:
     _validate_mode(payload.retrieval_mode)
     results, mode, elapsed_ms = await qa.retrieve_only(
         payload.query, top_k=payload.top_k, mode=payload.retrieval_mode
     )
+    if metrics is not None:
+        try:
+            metrics.record(endpoint="retrieve", total_ms=elapsed_ms)
+        except Exception:  # noqa: BLE001 - 观测不影响主流程
+            pass
     return RetrieveResponse(
         query=payload.query,
         retrieval_mode=mode,
         latency_ms=elapsed_ms,
-        results=HybridRetriever.to_debug(results),
+        results=HybridRetriever.to_debug(results, include_text=True),
     )
 
 
@@ -67,16 +82,71 @@ async def chat(
         top_k=payload.top_k,
         mode=payload.retrieval_mode,
         debug=payload.debug,
+        session_id=payload.session_id,
     )
     # retrieved_raw 是内部字段（RetrievedChunk 列表），不进 HTTP 响应
     outcome.pop("retrieved_raw", None)
     return ChatResponse(**outcome)
 
 
+class SessionClearRequest(BaseModel):
+    session_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "要清除的会话 ID；留空表示清空**全部**会话。"
+            "评测脚本在每轮开始前会调用它，否则第二轮会带着第一轮的会话历史，"
+            "测出来的就不是同一条件。"
+        ),
+    )
+
+
+@router.post("/session/clear", summary="清除会话历史（多轮评测可重复的前提）")
+async def clear_session(
+    payload: SessionClearRequest,
+    store: Any = Depends(get_session_store),
+    _: None = Depends(verify_api_key),
+) -> Dict[str, Any]:
+    if store is None:
+        return {"cleared_sessions": 0, "cleared_turns": 0, "note": "会话存储未装配"}
+    if payload.session_id:
+        cleared_turns = store.clear(payload.session_id)
+        return {"cleared_sessions": 1 if cleared_turns else 0, "cleared_turns": cleared_turns}
+    cleared_sessions = 0
+    cleared_turns = 0
+    for session_id in store.session_ids():
+        cleared_turns += store.clear(session_id)
+        cleared_sessions += 1
+    return {"cleared_sessions": cleared_sessions, "cleared_turns": cleared_turns}
+
+
+@router.post("/cache/clear", summary="清空查询缓存（含统计复位）")
+async def clear_cache(
+    container: ServiceContainer = Depends(get_container),
+    _: None = Depends(verify_api_key),
+) -> Dict[str, Any]:
+    """运维/测试用。正常情况下缓存由索引版本机制自动失效（入库即失效）。"""
+    cache = container.query_cache
+    if cache is None:
+        return {"cleared_entries": 0, "note": "查询缓存未启用"}
+    return {"cleared_entries": cache.clear(), "stats": cache.stats()}
+
+
+@router.get("/cache/stats", summary="查询缓存统计（命中/未命中/条目数）")
+async def cache_stats(
+    container: ServiceContainer = Depends(get_container),
+    _: None = Depends(verify_api_key),
+) -> Dict[str, Any]:
+    cache = container.query_cache
+    if cache is None:
+        return {"enabled": False}
+    return {"enabled": True, **cache.stats()}
+
+
 @router.post("/chat/stream", summary="RAG 问答（SSE 流式）")
 async def chat_stream(
     payload: ChatRequest,
     qa: QAEngine = Depends(get_qa),
+    metrics_collector: Any = Depends(get_metrics),
     _: None = Depends(verify_api_key),
 ) -> StreamingResponse:
     _validate_mode(payload.retrieval_mode)
@@ -84,6 +154,7 @@ async def chat_stream(
         payload.question,
         top_k=payload.top_k,
         mode=payload.retrieval_mode,
+        session_id=payload.session_id,
         debug=payload.debug,
     )
 
@@ -98,6 +169,15 @@ async def chat_stream(
                 yield f"event: token\ndata: {json.dumps({'text': piece}, ensure_ascii=False)}\n\n"
         except Exception as exc:  # 流中断时如实告知，不静默失败
             error_payload = {"message": f"{type(exc).__name__}: {exc}"}
+            if metrics_collector is not None:
+                try:
+                    metrics_collector.record(
+                        endpoint="chat_stream",
+                        total_ms=int((time.perf_counter() - started) * 1000),
+                        error=True,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
             yield f"event: error\ndata: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
 
         # 注意：done 事件不能放在 finally 里 yield。
@@ -112,6 +192,15 @@ async def chat_stream(
                 "请改用 POST /api/v1/chat。"
             ),
         }
+        if metrics_collector is not None:
+            try:
+                metrics_collector.record(
+                    endpoint="chat_stream",
+                    total_ms=int((time.perf_counter() - started) * 1000),
+                    generate_ms=elapsed_ms,
+                )
+            except Exception:  # noqa: BLE001
+                pass
         yield f"event: done\ndata: {json.dumps(done_payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(

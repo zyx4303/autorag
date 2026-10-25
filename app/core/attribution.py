@@ -36,7 +36,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set
 
-from app.core.text_utils import tokenize
+from app.core.text_utils import build_context_text, tokenize
 from app.logging_conf import get_logger
 from app.models import Citation, RetrievedChunk
 
@@ -120,6 +120,36 @@ _META_PATTERNS = (
     r"示例数据",
     r"虚构数据",
     r"虚构内容",
+    # 「示例车型 A 的数据为虚构示例」这类对数据性质的说明
+    r"(数据|内容|条款|数值).{0,8}(为|是)?.{0,4}虚构",
+    # 适用范围声明：也是"谈论资料本身"，词面覆盖同样验证不了。
+    # 刻意要求后面紧跟「示例/虚构/文档/资料/原文/真实」，
+    # 这样「仅适用于涡轮增压车型」这类真正的适用性事实仍会被校验。
+    r"(仅适用|只适用|不适用|仅针对|仅覆盖).{0,6}(示例|虚构|文档|资料|原文|真实|该车型|本车型|此车型|其他车型|其他品牌|同级车型)",
+    # ---- 列表引导语 / 承接语：不承载事实，是组织语言 ----
+    # 「仅能提供…」「仅能确认…」「以及常规定期检查项目」
+    r"^(仅|只)(能|可)(提供|确认|给出|列出|说明)",
+    r"^以及.{0,16}$",
+    r"(供|作|作为).{0,8}(参考|线索|方向|提示)",
+    # ---- 适用边界：说明「结论不能外推到什么范围」，不是断言 ----
+    r"^但?不(代表|意味着)",
+    r"^但?不可.{0,10}(互相|相互|直接|一概)?(套用|适用|外推|等同)",
+    # ---- 建议 / 假设 / 限制：是行动指引，不是断言 ----
+    r"^[如若](需|想|要|有|遇)",
+    r"^(需|应|请|要注意)(注意)?区分",
+    r"^或以.{0,20}为准",
+    r"^或(关注|查询|咨询|参见|浏览)",
+    r"不构成.{0,14}(清单|结论|依据|诊断)",
+    r"(不足以|难以|无法).{0,10}(给出|判断|确定|得出|支持|形成)",
+    # ---- 评述：在比较两套依据，不是陈述资料里的事实 ----
+    r"^(两者|二者|双方).{0,12}(不一致|不符|不同|有差异)",
+    r"(列举|表述|措辞|数值|说法).{0,12}(不.{0,4}一致|不符|有出入|有差异)",
+    # ---- 对「本回答自身结构」的指代，不是对资料的断言 ----
+    r"^上述.{0,8}(项|条目|条目|编号)",
+    # 疑问式主题句：把问题复述成「是否存在…」，没有可校验的事实
+    r"是否.{0,20}(要求|需要|必须)$",
+    # 疑问性短语（「具体适用哪一数值」）不是事实断言
+    r"^(具体)?(适用|采用|取|是)?哪(一|个|些).{0,12}$",
 )
 
 # 否定性陈述：模型在陈述"资料里没有 X"。
@@ -129,17 +159,90 @@ _NEGATION_PATTERNS = (
     r"未提及",
     r"未包含",
     r"未覆盖",
+    r"未收录",
+    r"未记录",
     r"并没有",
     r"均未",
     r"并非",
     r"没有涉及",
     r"不含.{0,8}(价格|费用|参数|数据)",
+    # 「也没有 2027 款未上市车型的参数信息」这类承前省略的缺口陈述
+    r"(也)?(没有|无).{0,18}(信息|参数|数据|说明|清单|依据|图例)",
 )
+
+# 「语料缺口」陈述：主语是资料/文档/表格，谓语是「没有 / 仅有」。
+#
+# 为什么必须单独识别：用词面覆盖率**在原理上无法验证「缺失」**。
+# 「该表未标注其是否等同于首保」这句话即使完全正确，覆盖率也必然是 0 ——
+# 因为被指的恰恰是"不存在的东西"，没有词可以匹配。
+#
+# 实测（2026-10-25，把过渡语判定下沉到分句级之后）：
+# 全部 5 个 unsupported 句子**都是这一类**，没有一个是真正的编造。
+# 若不识别，诚实说明边界的回答会被系统性地打成"依据不足"。
+#
+# 判据刻意同时要求「语料指称」+「缺失标记」，而不是只匹配 未/无：
+# 「该车型未配备胎压监测」这种对车辆本身的否定仍应被校验，不能放过。
+_CORPUS_REF = r"(资料|文档|文件|知识库|语料|原文|表格|清单|条目|章节|段落|该表|本表|上表|上述表)"
+_ABSENCE_MARK = r"(未|没有|无|不含|不涉及|不包含|仅有|只有|仅含|仅包含|仅涉及|仅包括|仅涵盖|仅能|仅可|仅列|仅给)"
+
+# 主语被省略的缺口陈述（承前省略在中英文里都常见）
+_ELIDED_ABSENCE_PATTERNS = (
+    r"^且?(未|没有)(对|就).{0,14}(作|做|给出|提供).{0,8}(规定|说明|解释|区分)",
+    r"^且?(未|没有)(给出|提供|说明|标注|注明).{0,14}",
+    r"^但?(不能|不可)(据此|作为|直接|用于|因此).{0,14}(推断|依据|结论|诊断|判断|判定|等同|套用|适用|沿用|外推|原因)",
+    r"^不(能|可)作为.{0,14}(依据|结论|诊断|判断|凭证)",
+)
+
+# 分句开头的小标题（Markdown 粗体标题 / # 标题 / 中文序号小标题）。
+# 模型常把「**三、需注意的差异**」和正文粘在同一个分句里（换行被规整掉了），
+# 整句按标题处理会连正文断言一起丢掉，所以只剥前缀、不丢内容。
+_HEADING_PREFIX_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*[^\n]{0,40}|\*\*[^*\n]{1,30}\*\*\s*[：:]?\s*"
+    r"|[一二三四五六七八九十]+、[^\n]{0,20}\n)\s*"
+)
+# 整句只有标题、没有正文
+_HEADING_ONLY_RE = re.compile(r"^\s*(?:#{1,6}\s*\S.{0,40}|\*\*[^*\n]{1,30}\*\*)\s*[：:]?\s*$")
+
+
+def strip_clause_heading(clause: str) -> str:
+    """剥掉分句开头的小标题，只保留正文断言。
+
+    实测（2026-10-25）有一句长这样：
+        `**三、需注意的差异**\n示例车型 A 的包修期里程为 100,000 km`
+    前半是小标题、后半是**带数字的事实断言**。整句跳过会把断言漏掉；
+    整句校验又会让标题文字拉低覆盖率。剥前缀是唯一两头都不亏的做法。
+    """
+    text = (clause or "").strip()
+    if not text:
+        return ""
+    if _HEADING_ONLY_RE.match(text):
+        return ""
+    return _HEADING_PREFIX_RE.sub("", text, count=1).strip()
+
 
 SUPPORTED = "supported"
 WEAK = "weak"
 UNSUPPORTED = "unsupported"
 NO_CITATION = "no_citation"
+
+
+def is_corpus_absence_claim(clause: str) -> bool:
+    """分句是否在陈述「语料里没有 / 只有 X」。
+
+    这类句子不能用词面覆盖率验证：被指的东西本来就不存在，没有词可匹配，
+    覆盖率恒为 0。判它 unsupported 等于把「诚实说明边界」当成「编造」。
+
+    两种句式都覆盖：
+    - 有主语：「该表未标注…」「资料中仅有…」
+    - 承前省略：「且未对…作专门规定」「不能作为…结论」
+    """
+    core = (clause or "").strip().strip("：:，,。.！!？?、；; ")
+    if not core:
+        return False
+    if re.search(_CORPUS_REF, core) and re.search(_ABSENCE_MARK, core):
+        return True
+    return any(re.search(pattern, core) for pattern in _ELIDED_ABSENCE_PATTERNS)
+
 
 __all__ = [
     "SentenceAttribution",
@@ -149,6 +252,8 @@ __all__ = [
     "WEAK",
     "UNSUPPORTED",
     "NO_CITATION",
+    "is_corpus_absence_claim",
+    "strip_clause_heading",
 ]
 
 
@@ -181,6 +286,10 @@ class AttributionReport:
     weak: int = 0
     unsupported: int = 0
     no_citation: int = 0
+    # 被判定为「语料缺口陈述」而跳过校验的分句数。
+    # 单列出来是为了可见：它既不进分子也不进分母，
+    # 如果不报，读者会以为分母就是全部句子。
+    meta_skipped: int = 0
     score: float = 1.0
     sentences: List[SentenceAttribution] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
@@ -197,15 +306,16 @@ class AttributionReport:
             "weak": self.weak,
             "unsupported": self.unsupported,
             "no_citation": self.no_citation,
+            "meta_skipped": self.meta_skipped,
             "score": round(self.score, 4),
             "warnings": self.warnings,
         }
         if include_sentences:
-            data["sentences"] = [
-                s.to_dict()
-                for s in self.sentences
-                if s.status in {WEAK, UNSUPPORTED, NO_CITATION}
-            ]
+            # 输出**全部**被校验的句子，不只问题句。
+            # 曾经只给 weak/unsupported/no_citation —— 对「归因不足为什么」够用，
+            # 但句级引用高亮需要的是「每句有哪段依据」，supported 句恰恰是主体，
+            # 过滤掉它们高亮就无从做起（实测发现）。消费方按 status 自行过滤。
+            data["sentences"] = [s.to_dict() for s in self.sentences]
         return data
 
 
@@ -360,8 +470,20 @@ class AttributionChecker:
             return report
 
         # 引用编号 -> 片段正文。build_context 是按 results 顺序编号的（从 1 开始）
+        #
+        # 校验面 = 片段正文 + 章节路径（2026-10-25 修改，原因见下）。
+        # 只用正文会把「写在章节标题里」的真话判成编造：实测多轮评测 MT2，
+        # 模型答「…以先到者为准 [1]」—— 这句话在文档的章节标题
+        # 「二、定期保养项目表（按里程 / 时间，以先到者为准）」里，
+        # 但被引的片段恰好是纯表格，正文没有它。2/4 句「无依据」触发编造检测，
+        # 把一个完全正确的回答强制改成了拒答。
+        #
+        # 为什么不怕放宽：章节路径是文档真实的标题文字，用户顺着引用本来就能看到它；
+        # 幻觉要恰好编出与标题重合的词才能蒙混，成本远高于收益。
+        # （不用 title：文档标题每段都一样，只会无差别放宽。）
         passage_by_index: Dict[int, str] = {
-            i + 1: (chunk.text or "") for i, chunk in enumerate(chunks)
+            i + 1: build_context_text(chunk.text or "", chunk.section or "")
+            for i, chunk in enumerate(chunks)
         }
         # 若传了 citations，用它对一遍（citations 的 index 就是展示给用户的编号）
         if citations:
@@ -376,8 +498,14 @@ class AttributionChecker:
 
         for raw in _split_sentences_safe(body):
             sentence = raw.strip()
-            if not sentence or self._is_transitional(sentence):
+            if not sentence:
                 continue
+            # 注意：这里**不能**按整句判过渡语。
+            # 「资料中未找到 X；但 Y 为 Z [6]」这种句子前半句在谈资料缺口、
+            # 后半句是实打实的事实断言。按整句跳过会把断言一起漏掉 ——
+            # 实测 20 条评测里有 10 条因此归因为空（total=0），
+            # 而那恰恰是幻觉最容易混进去的「先声明缺口、再给断言」句式。
+            # 过渡语判定下沉到分句级，见下方循环。
 
             # 引用在**句子级**提取，再让各分句继承：
             # 模型常常只在句末标一次 [1]，若按分句各取各的，
@@ -386,12 +514,25 @@ class AttributionChecker:
             seen: Set[int] = set()
             uniq = [i for i in indices if not (i in seen or seen.add(i))]
 
-            for clause in self._split_clauses(sentence):
+            for raw_clause in self._split_clauses(sentence):
+                # 先剥掉开头的小标题（「**三、需注意的差异**\n正文」这种粘连），
+                # 只跳过纯标题，正文断言照常校验。
+                clause = strip_clause_heading(raw_clause)
+                if not clause:
+                    report.meta_skipped += 1
+                    continue
                 clean = _CITATION.sub("", clause).strip()
                 if len(clean) < self._min_clause_chars:
                     continue
                 terms = [t for t in tokenize(clean) if t]
                 if not terms:
+                    continue
+                # 过渡语 / 元话语 / 否定陈述在**分句**级判：只跳过真正在谈资料本身的那半句，
+                # 同一句里的事实断言照常校验。
+                if self._is_transitional(clause):
+                    continue
+                if is_corpus_absence_claim(clause):
+                    report.meta_skipped += 1
                     continue
 
                 if not uniq:

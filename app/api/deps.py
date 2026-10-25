@@ -45,6 +45,15 @@ class ServiceContainer:
     agent: Optional[Any] = None
     # SqliteSaver 的上下文管理器：必须常驻，否则连接会被回收关闭
     agent_checkpoint_ctx: Optional[Any] = None
+    # 主 /chat 链路的会话历史（内存态）；Agent 链路用的是 SqliteSaver，两者互不相干
+    session_store: Optional[Any] = None
+    # 查询缓存与索引版本：入库后版本自增使缓存失效（L5）
+    query_cache: Optional[Any] = None
+    index_state: Optional[Any] = None
+    # 异步入库任务管理（L5）
+    ingest_jobs: Optional[Any] = None
+    # 请求指标采集（延迟分位数 / token / 成本，L5）
+    metrics: Optional[Any] = None
     init_errors: List[str] = field(default_factory=list)
 
     @property
@@ -84,6 +93,21 @@ def get_container(request: Request) -> ServiceContainer:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="服务尚未初始化完成"
         )
     return container
+
+
+def get_session_store(container: ServiceContainer = Depends(get_container)) -> Any:
+    """会话历史存储。未初始化时返回 None，调用方自行降级为单轮。"""
+    return container.session_store
+
+
+def get_ingest_jobs(container: ServiceContainer = Depends(get_container)) -> Any:
+    """异步入库任务管理器。"""
+    return container.ingest_jobs
+
+
+def get_metrics(container: ServiceContainer = Depends(get_container)) -> Any:
+    """请求指标采集器。未装配时返回 None，调用方跳过记录。"""
+    return container.metrics
 
 
 def get_qa(container: ServiceContainer = Depends(get_container)) -> QAEngine:

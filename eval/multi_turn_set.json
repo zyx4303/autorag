@@ -1,0 +1,125 @@
+{
+  "name": "multi-turn-session-eval",
+  "version": "1.0",
+  "items": [
+    {
+      "id": "MT1",
+      "session_id": "s-first",
+      "turn": 1,
+      "category": "多轮-保养",
+      "question": "示例车型 A 的首保应该在多少公里或多长时间内进行？",
+      "ground_truth": "第 1 次保养节点为 16,000 km 或 12 个月，以先到者为准。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_snippets": [
+        "第 1 次 | 16 | 12"
+      ],
+      "expected_keywords": [
+        "16,000",
+        "12 个月"
+      ],
+      "must_refuse": false,
+      "notes": "多轮第 1 轮：作为上下文，本身是单轮可答的问题"
+    },
+    {
+      "id": "MT2",
+      "session_id": "s-first",
+      "turn": 2,
+      "category": "多轮-保养",
+      "question": "那第 2 次保养呢？",
+      "ground_truth": "第 2 次保养节点为 32,000 km 或 24 个月，以先到者为准。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_snippets": [
+        "第 2 次 | 32 | 24"
+      ],
+      "expected_keywords": [
+        "32,000",
+        "24 个月"
+      ],
+      "must_refuse": false,
+      "notes": "指代消解：问题里没有任何主语和「里程/时间」，必须结合上一轮才能检索"
+    },
+    {
+      "id": "MT3",
+      "session_id": "s-fluids",
+      "turn": 1,
+      "category": "多轮-油液",
+      "question": "刹车油需要定期更换吗？更换周期是多少？",
+      "ground_truth": "示例车型 A：更换制动液 每 2 年。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_snippets": [
+        "更换制动液 | 每 2 年"
+      ],
+      "expected_keywords": [
+        "制动液",
+        "2 年"
+      ],
+      "must_refuse": false,
+      "notes": "多轮第 1 轮：用户说「刹车油」，文档写「制动液」"
+    },
+    {
+      "id": "MT4",
+      "session_id": "s-fluids",
+      "turn": 2,
+      "category": "多轮-油液",
+      "question": "那火花塞呢？",
+      "ground_truth": "示例车型 A：更换火花塞 每 64,000 km。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_snippets": [
+        "更换火花塞 | 每 64,000 km"
+      ],
+      "expected_keywords": [
+        "64,000"
+      ],
+      "must_refuse": false,
+      "notes": "指代消解：问题里没有「更换周期」，「问的是周期」要从上一轮继承"
+    },
+    {
+      "id": "MT5",
+      "session_id": "s-warranty",
+      "turn": 1,
+      "category": "多轮-保修",
+      "question": "示例车型 A 的整车质保期是多久？",
+      "ground_truth": "示例文档写的是整车包修期 3 年或 100,000 km，以先到者为准（虚构条款，非法规下限）。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_snippets": [
+        "整车包修期：3 年或 100,000 km"
+      ],
+      "expected_keywords": [
+        "3 年",
+        "100,000"
+      ],
+      "must_refuse": false,
+      "notes": "多轮第 1 轮"
+    },
+    {
+      "id": "MT6",
+      "session_id": "s-warranty",
+      "turn": 2,
+      "category": "多轮-保修",
+      "question": "哪些情况不属于保修范围？",
+      "ground_truth": "未按规定保养、事故损坏、擅自改装、使用非原厂配件导致的故障（示例条款）。",
+      "expected_sources": [
+        "示例-虚构车型A-保养与故障码.md"
+      ],
+      "expected_snippets": [
+        "不属于保修范围的情形"
+      ],
+      "expected_keywords": [
+        "未按规定保养",
+        "擅自改装"
+      ],
+      "must_refuse": false,
+      "notes": "反向校验：这题本身基本独立，用于验证「改写不会帮倒忙」"
+    }
+  ]
+}

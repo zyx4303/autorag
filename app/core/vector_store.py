@@ -16,6 +16,7 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 
 from app.core.embedding import BaseEmbedder
+from app.core.text_utils import build_context_text
 from app.logging_conf import get_logger
 from app.models import Chunk
 
@@ -73,12 +74,19 @@ class VectorStore:
     # 写入
     # ------------------------------------------------------------------ #
     async def upsert_chunks(self, chunks: Sequence[Chunk]) -> int:
-        """向量化并写入片段，返回写入条数。"""
+        """向量化并写入片段，返回写入条数。
+
+        向量用「章节路径 + 正文」计算，但 `documents` 存的是**原文**。
+        两者分离是有意为之：
+        - 用增强文本算相似度，纯表格片段才不会因为正文没有一个关键词而沉底；
+        - 存原文，引用展示、片段摘要、逐句归因都保持干净（前缀会污染归因的 token 覆盖）。
+        """
         if not chunks:
             return 0
 
         texts = [chunk.text for chunk in chunks]
-        vectors = await self._embedder.embed_documents(texts)
+        index_texts = [build_context_text(chunk.text, chunk.section) for chunk in chunks]
+        vectors = await self._embedder.embed_documents(index_texts)
         if len(vectors) != len(chunks):
             raise VectorStoreError(
                 f"向量数量({len(vectors)})与片段数量({len(chunks)})不一致，拒绝写入"
@@ -106,7 +114,10 @@ class VectorStore:
                 }
             )
 
-        self._collection.upsert(
+        # Chroma 的 upsert 是同步阻塞调用（含磁盘写），
+        # 挪进线程池，避免大语料入库时卡住事件循环（/health 都会变慢）
+        await asyncio.to_thread(
+            self._collection.upsert,
             ids=[chunk.chunk_id for chunk in chunks],
             embeddings=vectors,
             documents=texts,

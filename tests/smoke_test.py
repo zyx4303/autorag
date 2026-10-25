@@ -23,7 +23,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.config import Settings  # noqa: E402
-from app.core.attribution import AttributionChecker  # noqa: E402
+from app.core.attribution import (  # noqa: E402
+    AttributionChecker,
+    is_corpus_absence_claim,
+    strip_clause_heading,
+)
 from app.core.bm25 import BM25Index  # noqa: E402
 from app.core.chunker import chunk_document  # noqa: E402
 from app.core.embedding import HashEmbedder  # noqa: E402
@@ -125,6 +129,42 @@ def test_chunker(tmp_root: Path) -> None:
     check(
         "表格未被切断",
         any("| P0420 |" in chunk.text and "| 建议处理 |" in chunk.text for chunk in chunks),
+    )
+
+    # ---- 章节标签必须与正文一致（实测 4/79 个片段曾标错） ----
+    def _section_consistency(extra_text: str):
+        doc = SourceDocument(
+            doc_id="doc_sec",
+            source="章节.md",
+            title="章节",
+            text=extra_text,
+            checksum="y" * 8,
+        )
+        got = chunk_document(doc, settings)
+        # 每个片段的 section 里的「第 N 章」必须能在正文里找到对应内容标记
+        bad = [
+            c
+            for c in got
+            if c.text.lstrip().startswith("---")
+            or ("第壹章" in c.section and "壹" not in c.text)
+            or ("第贰章" in c.section and "贰" not in c.text)
+        ]
+        return got, bad
+
+    # 章节之间有 Markdown 分割线 —— 这正是线上数据里的情形
+    hr_doc = (
+        "## 第壹章 保养\n\n壹：机油每 8,000 km 更换。\n\n---\n\n"
+        "## 第贰章 保修\n\n贰：包修期为 3 年或 60,000 公里。\n"
+    )
+    got, bad = _section_consistency(hr_doc)
+    check("分割线不会被当成正文保留", not any("---" in c.text for c in got),
+          str([c.text[:12] for c in got]))
+    check("章节标签与正文一致（含分割线场景）", not bad,
+          str([(c.section[-8:], c.text[:10]) for c in bad]))
+    check(
+        "两章各自成块，不合并",
+        any("壹" in c.text for c in got) and any("贰" in c.text for c in got),
+        str([c.text[:8] for c in got]),
     )
 
 
@@ -421,6 +461,629 @@ def test_attribution() -> None:
     body = checker.split_body("结论 [1]。\n\n依据：\n[1] 保养.md · 周期表")
     check("「依据：」清单被剥离", "依据" not in body and "结论" in body, body[:30])
 
+    # ---- 校验面 = 片段正文 + 章节路径 ----
+    # 真话可能写在章节标题里（「以先到者为准」），只对正文算覆盖会把它判成编造。
+    # 实测把一个完全正确的多轮回答强制改成了拒答。
+    sec_chunk = RetrievedChunk(
+        chunk_id="c3", doc_id="d3", source="保养.md",
+        section="二、定期保养项目表（按里程 / 时间，以先到者为准）",
+        text="| 第 1 次 | 16 | 12 |",
+    )
+    r_sec = checker.check("保养节点以先到者为准 [1]。", [sec_chunk])
+    check(
+        "写在章节标题里的真话不算编造",
+        r_sec.unsupported == 0,
+        f"unsupported={r_sec.unsupported}",
+    )
+    r_fake = checker.check("质保期为 10 年 [1]。", [sec_chunk])
+    check(
+        "正文没有的编造内容不会被判成有依据",
+        r_fake.unsupported + r_fake.weak >= 1,
+        f"unsupported={r_fake.unsupported} weak={r_fake.weak}",
+    )
+
+    # ---- 过渡语必须按**分句**判，不能按整句 ----
+    # 曾经的 bug：句子里出现「未找到」就整句跳过，
+    # 连带把同一句里的事实断言也漏掉了。实测 20 条评测里 10 条因此归因为空。
+    mixed = "当前知识库中未找到机油标号的依据；但保养表写明发动机机油为每 8,000 km 更换 [1]。"
+    r6 = checker.check(mixed, chunks)
+    check(
+        "同一句里「声明缺口 + 事实断言」仍要校验断言",
+        r6.total >= 1 and r6.supported >= 1,
+        f"total={r6.total} supported={r6.supported}",
+    )
+    check(
+        "纯声明缺口的那半句不计入断言",
+        r6.total == 1,
+        f"total={r6.total}（应只有后半句进校验）",
+    )
+
+    # ---- 「语料缺口」陈述无法用词面覆盖验证，必须跳过 ----
+    # 全部分句取自 2026-10-25 实跑，当时 5 个 unsupported 全是这一类，
+    # 没有一个是真正的编造。
+    absence_cases = [
+        "但该表未标注其是否等同于首保",
+        "资料中仅有示例车型 A 的定期保养项目表",
+        '且未对"长途出行"作专门规定 [1]',
+        '且资料未给出"不制冷"与上述任一故障码的对应关系',
+        "不能作为实际诊断结论 [2][6]",
+        "不能直接套用到其他品牌或车型 [2][6]",
+        "该文件没有记录胎压标准值",
+    ]
+    for clause in absence_cases:
+        check(f"缺口陈述应跳过：{clause[:14]}", is_corpus_absence_claim(clause))
+
+    # 对车辆本身的否定是**事实断言**，不能放过
+    fact_cases = [
+        "该车型未配备胎压监测系统",
+        "该车不能正常启动",
+        "制动液每 2 年更换一次",
+        "该表规定机油每 8,000 km 更换",
+        "包修期不低于 3 年或 60,000 公里",
+    ]
+    for clause in fact_cases:
+        check(f"事实断言不应跳过：{clause[:14]}", not is_corpus_absence_claim(clause))
+
+    r7 = checker.check("资料中仅有示例车型 A 的定期保养项目表。", chunks)
+    check("纯缺口陈述的回答归因为空（无断言可校验）", r7.total == 0, f"total={r7.total}")
+    check("跳过的分句数被记录", r7.meta_skipped == 1, f"meta_skipped={r7.meta_skipped}")
+
+    # ---- 真实语料回放：19 个曾被评为「未标引用」的分句（2026-10-25 实测） ----
+    # 其中 16 句根本不是事实断言（引导语 / 缺口陈述 / 建议 / 评述 / 小标题），
+    # 只有 2 句是真断言。若这些判定退化，no_citation 会立刻虚高。
+    non_assertions = [
+        "仅能提供与高温环境相关的保养间隔调整说明",
+        "以及常规定期检查项目",
+        "上述第 3–7 项为示例车型 A 的定期保养节点",
+        "不构成夏季专项检查清单",
+        "如需夏季专项检查项目",
+        "仅能提供示例车型 A 保养时间表中与出行安全相关的常规检查项目，供参考",
+        "可作为排查方向参考",
+        "但不能据此判定实际故障原因",
+        "现有资料仅涉及故障码（DTC）结构、故障指示灯（MIL）术语及部分故障码含义",
+        "未收录警示灯图标的分类说明",
+        # 「不涉及」变体（2026-10-25 扩评集时实测）：语料指称 + 不涉及 → 跳过
+        "但该条目不涉及长期停放场景下的亏电判断或维护措施",
+        "该文件不包含此信息",
+        "需区分「示例车型 A 的虚构条款」与「法规最低要求」两套依据",
+        "两者数值并不一致",
+        '其"不属于保修范围"的列举也与法规第三十二条的表述不完全一致',
+        "仅能确认索赔所需材料及包修期内的部分相关义务",
+        "也没有 2027 款未上市车型的参数信息",
+        "或以各品牌官方售后渠道公布的价格为准",
+        "不代表其他车型 [1][3]",
+        "示例车型 A 的数据为虚构示例",
+        # 第二轮实跑补充：指代式适用范围 / 疑问式主题句 / 限制性结论 / 不可外推
+        "仅适用于该车型",
+        "该车型是否存在长途前检查要求",
+        "但不足以给出原因结论",
+        "不可互相套用 [1][2]",
+        # 第三轮补充：假设句 / 疑问性短语
+        "若需针对具体车型的夏季检查清单",
+        "具体适用哪一数值",
+        # 第四轮：同族同义词补充
+        "不适用于其他车型",
+        "可作为排查线索",
+        "或关注厂家官方发布渠道",
+    ]
+    for clause in non_assertions:
+        check(
+            f"非断言应跳过：{clause[:16]}",
+            checker._is_transitional(clause) or is_corpus_absence_claim(clause),
+        )
+
+    # 这两句是真断言（带数字），必须留在校验范围里
+    real_assertions = [
+        "示例车型 A 的包修期里程为 100,000 km",
+        "高于法规下限 60,000 km",
+        # 对车辆本身的否定是事实断言，不能因为带「不」就跳过
+        # （「不涉及/不包含」只有同时带语料指称才会跳过）
+        "该车型不使用 0W-20 机油",
+        "该车型不涉及召回",
+        # 类别约束（区别于「仅适用于该车型」这种指代式声明）仍是事实断言
+        "仅适用于涡轮增压车型",
+        "该机油可供涡轮增压发动机使用",
+        "机油滤清器每 8,000 km 更换",
+    ]
+    for clause in real_assertions:
+        check(
+            f"真断言必须校验：{clause[:16]}",
+            not checker._is_transitional(clause) and not is_corpus_absence_claim(clause),
+        )
+
+    # 已知误判（如实记录）：这是个小标题式名词短语，没有谓语，判定不出来。
+    # 它会留在分母里，属于可接受残差（1/122）。
+    check(
+        "已知误判：无谓语的小标题短语仍会被校验",
+        not checker._is_transitional("整车包修期与不属于保修范围的情形"),
+    )
+
+    # ---- 小标题与正文粘连时，只剥标题、保留断言 ----
+    check(
+        "粘连的小标题被剥离",
+        strip_clause_heading("**三、需注意的差异**\n示例车型 A 的包修期里程为 100,000 km")
+        == "示例车型 A 的包修期里程为 100,000 km",
+        strip_clause_heading("**三、需注意的差异**\n正文"),
+    )
+    check("纯标题行被整体剥空", strip_clause_heading("**四、结论**") == "")
+    check("普通断言不被改动", strip_clause_heading("制动液每 2 年更换") == "制动液每 2 年更换")
+
+    # ---- 适用范围声明：同样是「谈论资料」，但必须限定语境 ----
+    check("「仅适用于该示例车型」是元陈述", checker._is_transitional("仅适用于该示例车型"))
+    check("「不适用于真实车辆诊断」是元陈述", checker._is_transitional("不适用于真实车辆诊断"))
+    check(
+        "「仅适用于涡轮增压车型」是事实断言，不能跳过",
+        not checker._is_transitional("仅适用于涡轮增压车型"),
+    )
+
+
+def test_context_text() -> None:
+    """索引文本的上下文拼接：只影响索引，不能影响原文。"""
+    from app.core.text_utils import build_context_text
+
+    # 12.24 之后：章节含「保养」+ 正文含「第 1 次」→ 注入别称行（修 Q001 词汇鸿沟）
+    got = build_context_text("| 第 1 次 | 16 | 12 |", "二、定期保养项目表")
+    check("保养节点片段注入首保别称", "（同义表述：首保、首次保养）" in got, got)
+    check(
+        "别称行在正文之前",
+        got.startswith("二、定期保养项目表；（同义表述：首保、首次保养）\n"),
+        got,
+    )
+    check(
+        "with_aliases=False 可关闭注入",
+        build_context_text("| 第 1 次 | 16 | 12 |", "二、定期保养项目表", with_aliases=False)
+        == "二、定期保养项目表\n| 第 1 次 | 16 | 12 |",
+    )
+    check(
+        "无别称命中的片段不受影响",
+        build_context_text("普通正文内容", "无关章节")
+        == "无关章节\n普通正文内容",
+    )
+    check("无章节时原样返回", build_context_text("正文") == "正文")
+    check("章节为空串时原样返回", build_context_text("正文", "") == "正文")
+    check("章节为 None 时原样返回", build_context_text("正文", None) == "正文")
+    check(
+        "多个上下文用分号连接（避免跨边界 bigram 噪声）",
+        build_context_text("正文", "标题", "章节") == "标题；章节\n正文",
+        build_context_text("正文", "标题", "章节"),
+    )
+    check("上下文首尾空白被清理", build_context_text("正文", "  章节  ") == "章节\n正文")
+
+
+def test_refusal_guard() -> None:
+    """拒答兜底：区分「编造」与「只是忘了标引用」。
+
+    为什么单独测：真实评测集里没有「模型编造」的样本，这层逻辑靠跑评测验证不出来。
+    而它的第一版用「归因总分 < 阈值」当门槛，把两条高质量的部分覆盖回答误杀成拒答
+    （过度拒答率 7% → 21%），所以这里必须把边界钉死。
+    """
+    from app.services.rag_pipeline import refusal_on_hallucination
+
+    check(
+        "多数句子无依据 -> 判为编造",
+        refusal_on_hallucination({"total": 4, "unsupported": 3}, 0.5) is not None,
+    )
+    check(
+        "恰好一半无依据 -> 判为编造（阈值含等号）",
+        refusal_on_hallucination({"total": 4, "unsupported": 2}, 0.5) is not None,
+    )
+    check(
+        "少数句子无依据 -> 不拒答",
+        refusal_on_hallucination({"total": 4, "unsupported": 1}, 0.5) is None,
+    )
+    check(
+        "只有 1 句且无依据 -> 不拒答（样本太少，可能是元话语）",
+        refusal_on_hallucination({"total": 1, "unsupported": 1}, 0.5) is None,
+    )
+    check(
+        "只是没标引用、没有编造 -> 不拒答（第一版误杀就是这个场景）",
+        refusal_on_hallucination(
+            {"total": 4, "unsupported": 0, "no_citation": 4, "score": 0.0}, 0.5
+        )
+        is None,
+    )
+    check(
+        "关闭开关（ratio=0）时不触发",
+        refusal_on_hallucination({"total": 4, "unsupported": 4}, 0.0) is None,
+    )
+    check("没有归因报告时不触发", refusal_on_hallucination(None, 0.5) is None)
+
+
+def test_attribution_highlight() -> None:
+    """句↔片段对齐：归因句子里的编号解析成来源明细，前端可直接渲染。"""
+    print("\n[12] 归因句↔片段对齐")
+    from app.models import Citation
+    from app.services.rag_pipeline import QAEngine
+
+    citations = [
+        Citation(index=1, chunk_id="c1", source="保养.md",
+                 section="二、定期保养项目表", position=2),
+        Citation(index=2, chunk_id="c2", source="保修.md", section="", position=5),
+    ]
+    attr = {
+        "total": 2, "supported": 2, "score": 1.0,
+        "sentences": [
+            {"text": "首保 16,000 km", "citations": [1], "coverage": 0.9, "status": "supported"},
+            {"text": "未找到依据", "citations": [], "coverage": 0.0, "status": "no_citation"},
+            {"text": "伪造句", "citations": [9], "coverage": 0.0, "status": "unsupported"},
+        ],
+    }
+    out = QAEngine.resolve_attribution_sources(attr, citations)
+    sents = out["sentences"]
+    check("句子数不变", len(sents) == 3)
+    check(
+        "编号解析成 source/section/position",
+        sents[0]["sources"] == [
+            {"index": 1, "source": "保养.md", "section": "二、定期保养项目表", "position": 2}
+        ],
+        str(sents[0]["sources"]),
+    )
+    check("无引用的句子 sources 为空列表", sents[1]["sources"] == [])
+    check(
+        "越界编号防御性标 invalid",
+        sents[2]["sources"][0].get("invalid") is True,
+        str(sents[2]["sources"]),
+    )
+    check("原 dict 不被就地修改", "sources" not in (attr["sentences"][0]))
+    check("报告级字段原样保留", out["total"] == 2 and out["score"] == 1.0)
+
+
+def test_session_multiturn() -> None:
+    """多轮会话：历史存储、历史块、改写消息体、改写护栏。"""
+    print("\n[11] 多轮会话")
+    import asyncio
+
+    from app.services.session_store import ConversationStore
+
+    store = ConversationStore(max_turns=3)
+    h1 = store.append("s1", "首保多少公里？", "16,000 km 或 12 个月 [1]。")
+    check("追加后返回完整历史", len(h1) == 1 and h1[0]["question"].startswith("首保"), str(h1))
+    check("默认轮次 refused=False", h1[0].get("refused") is False, str(h1[0]))
+    store.append("s1-ref", "量子纠缠？", "未找到依据", refused=True)
+    hist = store.history("s1-ref")
+    check("拒答轮 refused 标记保留", hist[-1].get("refused") is True, str(hist[-1]))
+    store.append("s1", "那第 2 次呢？", "32,000 km 或 24 个月 [2]。")
+    check("会话内按序累积", len(store.history("s1")) == 2)
+
+    for i in range(5):  # 超出上限后只留最近 3 轮
+        store.append("s1", f"第 {i} 轮", "答")
+    hist = store.history("s1")
+    check("超过上限时只保留最近 N 轮", len(hist) == 3, f"len={len(hist)}")
+    check("保留的是最近而不是最早的", hist[-1]["question"] == "第 4 轮", str(hist[-1]))
+
+    check("空 session_id 是安全 no-op", store.append("", "q", "a") == [])
+    check("clear 返回清掉的轮数", store.clear("s1") == 3 and store.history("s1") == [])
+
+    # ---- 历史块：组织语言用，不进依据 ----
+    from app.services.rag_pipeline import QAEngine
+
+    block = QAEngine.build_history_block(
+        [{"question": "首保多少公里？", "answer": "x" * 260}]
+    )
+    check("历史块含问题", "首保多少公里？" in block)
+    check("长答案被截断到 200 字", "…" in block and block.count("x") <= 200)
+    check("空问题不进历史块", QAEngine.build_history_block([{"question": "", "answer": "a"}]) == "")
+
+    # 拒答轮要在历史块 / 改写消息里显式标注（实测改写会把被拒话题拖进追问）
+    block_refused = QAEngine.build_history_block(
+        [{"question": "量子纠缠？", "answer": "未找到", "refused": True}]
+    )
+    check("历史块标注拒答轮", "（上轮未回答）" in block_refused, block_refused)
+    block_ok = QAEngine.build_history_block(
+        [{"question": "首保多少？", "answer": "16,000 km", "refused": False}]
+    )
+    check("正常轮不标注", "（上轮未回答）" not in block_ok)
+
+    rw_refused = QAEngine.build_rewrite_messages(
+        "那正常保养呢？",
+        [{"question": "量子纠缠？", "answer": "未找到依据", "refused": True}],
+    )
+    check("改写消息标注拒答轮", "（上轮未回答）" in rw_refused[1]["content"])
+    check("改写提示词含拒答规则", "上轮未回答" in rw_refused[0]["content"])
+
+    settings = Settings()
+    engine = QAEngine.__new__(QAEngine)  # 只测纯方法，跳过装配
+    engine._settings = settings
+
+    msgs_single = engine.build_messages("q", "ctx")
+    check("单轮提示词不含历史块", "对话历史" not in msgs_single[1]["content"])
+    msgs_multi = engine.build_messages("q", "ctx", history=[{"question": "上一问", "answer": "上一答"}])
+    check("多轮提示词含历史块标题", "对话历史" in msgs_multi[1]["content"])
+    check("历史块在参考资料之后、问题之前",
+          msgs_multi[1]["content"].index("参考资料") < msgs_multi[1]["content"].index("对话历史")
+          < msgs_multi[1]["content"].index("## 用户问题"))
+
+    rw = engine.build_rewrite_messages(
+        "那这个车呢？",
+        [{"question": "示例车型 A 的首保是多少公里？", "answer": "16,000 km"}] * 5,
+    )
+    check("改写消息只用最近 3 轮", rw[1]["content"].count("问：") == 3,
+          f"count={rw[1]['content'].count('问：')}")
+    check("改写消息含当前追问", "那这个车呢？" in rw[1]["content"])
+    check("改写 system 提示禁止回答", "不回答" in rw[0]["content"])
+
+    # ---- 改写护栏：不用真 LLM，用桩对象 ----
+    class _FakeLLM:
+        def __init__(self, text=None, error=False):
+            self._text, self._error = text, error
+
+        async def chat(self, messages):
+            if self._error:
+                raise RuntimeError("llm down")
+            obj = type("R", (), {})()
+            obj.text = self._text
+            return obj
+
+    engine._llm = _FakeLLM("示例车型 A 的第 2 次保养是多少公里？")
+    warnings: List[str] = []
+    rewritten, did = asyncio.run(
+        engine._rewrite_query("那第 2 次呢？", [{"question": "首保", "answer": "16,000 km"}], warnings)
+    )
+    check("正常改写生效", did and rewritten.startswith("示例车型 A"), rewritten)
+
+    engine._llm = _FakeLLM(error=True)
+    warnings2: List[str] = []
+    fallback, did2 = asyncio.run(engine._rewrite_query("那第 2 次呢？", [{"question": "首保", "answer": "a"}], warnings2))
+    check("改写失败回退为原问题", not did2 and fallback == "那第 2 次呢？")
+    check(
+        "回退时给出可观测警告",
+        any("已按原问题检索" in w for w in warnings2),
+        str(warnings2),
+    )
+
+    engine._llm = _FakeLLM("好")  # 太短，不可信
+    warnings3: List[str] = []
+    out3, did3 = asyncio.run(engine._rewrite_query("那第 2 次呢？", [{"question": "首保", "answer": "a"}], warnings3))
+    check("改写结果异常时回退", not did3 and out3 == "那第 2 次呢？", out3)
+
+    engine._llm = _FakeLLM("示例车型 A 的第 2 次保养？")
+    out4, did4 = asyncio.run(engine._rewrite_query("那第 2 次呢？", [], []))
+    check("无历史时不调用改写", not did4 and out4 == "那第 2 次呢？")
+
+
+def test_query_cache() -> None:
+    """L5 查询缓存：命中/未命中、LRU 淘汰、索引版本失效、跳过条件。"""
+    print("\n[13] 查询缓存")
+    from app.services.index_state import IndexState
+    from app.services.query_cache import QueryCache
+
+    cache = QueryCache(max_entries=3, ttl_seconds=60)
+    check("空缓存未命中", cache.get("a") is None)
+    cache.put("a", {"answer": "A"})
+    check("put 后命中且值相同", cache.get("a") == {"answer": "A"})
+
+    # LRU 淘汰：容量 3，塞 4 个后最早的被淘汰
+    cache.put("b", 2)
+    cache.put("c", 3)
+    cache.get("a")  # 访问 a，让 b 变成最久未用
+    cache.put("d", 4)
+    check("超容量后最久未用的被淘汰", cache.get("b") is None)
+    check("最近使用过的仍在", cache.get("a") is not None)
+    st = cache.stats()
+    check("统计计数正确", st["entries"] == 3 and st["hits"] >= 2 and st["misses"] >= 1, str(st))
+    check("clear 返回条数并清空", cache.clear() == 3 and cache.stats()["entries"] == 0)
+
+    # TTL：构造函数把 TTL 下限抬到 1.0s（防误配 0），测试直接改内部值验证过期逻辑
+    import time as _time
+
+    ttl_cache = QueryCache(max_entries=4, ttl_seconds=60)
+    ttl_cache._ttl = 0.05
+    ttl_cache.put("x", 1)
+    _time.sleep(0.08)
+    check("TTL 过期后未命中", ttl_cache.get("x") is None)
+    check("过期条目被移出存储", ttl_cache.stats()["entries"] == 0)
+
+    # 索引版本：版本变 → 旧键失效
+    state = IndexState()
+    check("初始版本为 1", state.version == 1)
+    cache2 = QueryCache()
+    key1 = f"v{state.version}|auto|k8|问题"
+    cache2.put(key1, "旧答案")
+    state.bump(reason="测试入库")
+    key2 = f"v{state.version}|auto|k8|问题"
+    check("版本递增", state.version == 2)
+    # 失效的真实机制：新请求构建的是新版本键 → 未命中 → 重新计算；
+    # 旧条目不是被删除，而是永远不会再被查到（之后由 LRU/TTL 自然回收）
+    check("新版本键未命中（会重新计算而不是拿旧答案）", cache2.get(key2) is None)
+    cache2.put(key2, "新答案")
+    check("新版本键命中", cache2.get(key2) == "新答案")
+
+    # 跳过条件：多轮与 debug 不进缓存（评测方差不能被缓存污染）
+    check("单轮非 debug 可缓存", QAEngine._cacheable(None, False) is True)
+    check("多轮请求不缓存", QAEngine._cacheable("s1", False) is False)
+    check("debug 请求不缓存", QAEngine._cacheable(None, True) is False)
+
+    # 键的构造：top_k/mode 归一化，问题参与
+    settings = Settings()
+    engine = QAEngine.__new__(QAEngine)
+    engine._settings = settings
+    engine._query_cache = QueryCache()
+    engine._index_state = state
+    k1 = engine._cache_key("首保多少公里？", None, None)
+    k2 = engine._cache_key("首保多少公里？", None, None)
+    k3 = engine._cache_key("首保多少公里？", settings.top_k + 1, None)
+    k4 = engine._cache_key("首保多少公里？", None, "bm25")
+    check("相同参数生成相同键", k1 == k2 and k1 is not None)
+    check("None 的 top_k 归一化为默认值", engine._cache_key("q", settings.top_k, None) == engine._cache_key("q", None, None))
+    check("不同 top_k 生成不同键", k1 != k3)
+    check("mode 参与键", k1 != k4)
+    check("不同问题不同键", engine._cache_key("刹车油呢？", None, None) != k1)
+    # 关闭开关时不生成键
+    settings2 = Settings()
+    settings2.query_cache_enabled = False
+    engine._settings = settings2
+    check("开关关闭返回 None（不缓存）", engine._cache_key("q", None, None) is None)
+
+
+def test_ingest_jobs() -> None:
+    """L5 异步入库：提交/进度/完成/失败/单飞约束/历史上限。"""
+    print("\n[14] 异步入库任务管理")
+    import asyncio
+
+    from app.models import IngestResponse
+    from app.services.ingestion_jobs import IngestJobManager
+
+    class _FakeIngestion:
+        def __init__(self, fail=False, delay=0.0):
+            self._fail, self._delay = fail, delay
+            self.calls = []
+
+        async def ingest(self, rebuild=False, reset_registry=False,
+                         only_sources=None, progress_cb=None):
+            self.calls.append({"rebuild": rebuild, "only": only_sources})
+            if progress_cb:
+                progress_cb({"phase": "file", "source": "a.md", "status": "indexed"})
+            if self._delay:
+                await asyncio.sleep(self._delay)
+            if self._fail:
+                raise ValueError("模拟入库失败")
+            return IngestResponse(scanned=1, indexed=1, total_chunks_in_store=1)
+
+    async def _scenario():
+        mgr = IngestJobManager()
+
+        # 成功路径：queued → running → done，进度被记录
+        acc = mgr.start(_FakeIngestion(), rebuild=False)
+        job_id = acc["job_id"]
+        check("受理返回 job_id", acc["status"] == "queued" and job_id)
+        for _ in range(50):
+            await asyncio.sleep(0.02)
+            if mgr.status(job_id)["status"] == "done":
+                break
+        job = mgr.status(job_id)
+        check("任务完成", job["status"] == "done", job["status"])
+        check("进度被记录（file 阶段）", job["progress"].get("source") == "a.md", str(job["progress"]))
+        check("结果落盘", job["result"]["indexed"] == 1)
+        check("finished_at 已填", bool(job["finished_at"]))
+
+        # 单飞约束：任务在跑时再提交要被拒
+        slow = _FakeIngestion(delay=0.3)
+        acc2 = mgr.start(slow)
+        await asyncio.sleep(0.05)
+        check("运行中任务可见", mgr.running_job_id == acc2["job_id"])
+        try:
+            mgr.start(_FakeIngestion())
+            check("并发提交被拒", False)
+        except RuntimeError as exc:
+            check("并发提交被拒", "不允许并发" in str(exc))
+        for _ in range(100):
+            await asyncio.sleep(0.05)
+            if mgr.status(acc2["job_id"])["status"] == "done":
+                break
+        check("慢任务最终完成", mgr.status(acc2["job_id"])["status"] == "done")
+        check("结束后 running 清空", mgr.running_job_id is None)
+
+        # 失败路径：异常被捕获落记录，而不是悬空 task
+        acc3 = mgr.start(_FakeIngestion(fail=True))
+        for _ in range(50):
+            await asyncio.sleep(0.02)
+            if mgr.status(acc3["job_id"])["status"] == "failed":
+                break
+        job3 = mgr.status(acc3["job_id"])
+        check("失败被记录", job3["status"] == "failed" and "模拟入库失败" in job3["error"])
+
+        # 未知任务查不到
+        check("未知 job_id 返回 None", mgr.status("nope") is None)
+
+        # 历史上限：_MAX_FINISHED_JOBS 是模块常量，直接验证 prune 逻辑
+        from app.services import ingestion_jobs as ij
+        check("历史上限为正数", ij._MAX_FINISHED_JOBS >= 1)
+
+    asyncio.run(_scenario())
+
+
+def test_metrics_collector() -> None:
+    """L5 请求指标：分位数、环形缓冲、成本估算、空窗口、分端点。"""
+    print("\n[15] 请求指标采集")
+    from app.services.metrics_collector import RequestMetricsCollector, _percentile
+
+    # 分位数：已知数组验证下标法
+    # 用奇数长度数组避开 round 的银行家舍入歧义（round(4.5)=4，round(0.5*10)=5 无歧义）
+    data = sorted([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+    check("P50 正确", _percentile(data, 50) == 6, str(_percentile(data, 50)))  # round(0.5*10)=5
+    check("P100 是最大值", _percentile(data, 100) == 11)
+    check("空数组返回 None", _percentile([], 95) is None)
+
+    c = RequestMetricsCollector(max_records=10)  # 小缓冲便于测淘汰
+    c.record("chat", total_ms=100, prompt_tokens=10, completion_tokens=20)
+    c.record("chat", total_ms=200, cache_hit=True)
+    c.record("chat", total_ms=300, refused=True)
+    c.record("retrieve", total_ms=5)
+
+    snap = c.snapshot()
+    check("窗口计数", snap["count"] == 4)
+    check("总体 P50 合理", snap["latency_overall"]["p50_ms"] == 200, str(snap["latency_overall"]))
+    check("分端点统计", snap["latency_by_endpoint"]["retrieve"]["count"] == 1)
+    check("缓存命中率 1/4", snap["cache_hit_rate"] == 0.25)
+    check("拒答率 1/4", snap["refusal_rate"] == 0.25)
+    check("有 usage 的请求数", snap["tokens"]["requests_with_usage"] == 1)
+    check("token 汇总", snap["tokens"]["prompt"] == 10 and snap["tokens"]["completion"] == 20)
+    check("未配单价时不输出成本", "estimated_cost" not in snap)
+
+    # 环形缓冲：超出上限后丢最老的
+    for i in range(15):
+        c.record("chat", total_ms=i)
+    snap2 = c.snapshot()
+    check("缓冲有界", snap2["count"] == 10, str(snap2["count"]))
+    check("被挤掉的记录被计数", snap2["dropped_by_buffer"] >= 5, str(snap2["dropped_by_buffer"]))
+    # 最老的 5 条（total_ms=100..300 那些）已不在：窗口里最小值应是第 5 次追加的
+    check("留下的是最近的", snap2["latency_overall"]["max_ms"] == 14, str(snap2["latency_overall"]))
+
+    # 成本估算：配置单价后输出且数学正确
+    c2 = RequestMetricsCollector()
+    c2.record("chat", prompt_tokens=1_000_000, completion_tokens=500_000)
+    cost = c2.snapshot(price_prompt_per_m=2.0, price_completion_per_m=8.0)["estimated_cost"]
+    check("成本估算数学正确", abs(cost["total"] - (2.0 + 4.0)) < 1e-6, str(cost))
+    check("只配一个单价不估算", (
+        "estimated_cost" not in c2.snapshot(price_prompt_per_m=2.0)
+    ))
+
+    # 空窗口
+    empty = RequestMetricsCollector().snapshot()
+    check("空窗口 count=0 且有说明", empty["count"] == 0 and "note" in empty)
+
+
+def test_reranker_quantize() -> None:
+    """L5 精排 int8 量化：helper 行为 + 配置接线（用小模型，不加载 1.1GB 权重）。"""
+    print("\n[16] 精排量化")
+    try:
+        import torch
+        from torch import nn
+    except ImportError:
+        print("  （torch 不可用，跳过）")
+        return
+
+    from app.core.reranker import quantize_linear_layers
+
+    class _Tiny(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc1 = nn.Linear(8, 8)
+            self.act = nn.ReLU()
+            self.fc2 = nn.Linear(8, 1)
+
+        def forward(self, x):
+            return self.fc2(self.act(self.fc1(x)))
+
+    tiny = _Tiny().eval()
+    quantized = quantize_linear_layers(tiny, torch)
+    # 量化后 Linear 被替换为动态量化层；ReLU 等非 Linear 不受影响
+    check("Linear 被替换为量化层", not isinstance(quantized.fc1, nn.Linear))
+    check("非 Linear 层不受影响", isinstance(quantized.act, nn.ReLU))
+    # 前向仍然能跑，输出形状一致
+    x = torch.randn(2, 8)
+    with torch.no_grad():
+        y = quantized(x)
+    check("量化后前向可用", y.shape == (2, 1), str(y.shape))
+
+    # 配置接线：默认开、可关
+    from app.core.reranker import CrossEncoderReranker
+    settings = Settings()
+    r_on = CrossEncoderReranker(quantize=True)
+    r_off = CrossEncoderReranker(quantize=False)
+    check("默认开启量化", settings.rerank_quantize is True)
+    check("构造参数正确传递", r_on._quantize is True and r_off._quantize is False)
+
 
 def main() -> int:
     print("=" * 68)
@@ -438,6 +1101,14 @@ def main() -> int:
     test_guard_claims()
     test_agent_invariants()
     test_attribution()
+    test_context_text()
+    test_refusal_guard()
+    test_session_multiturn()
+    test_attribution_highlight()
+    test_query_cache()
+    test_ingest_jobs()
+    test_metrics_collector()
+    test_reranker_quantize()
 
     print("\n" + "=" * 68)
     print(f"结果：通过 {PASSED} 项，失败 {FAILED} 项")

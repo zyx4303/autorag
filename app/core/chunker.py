@@ -14,7 +14,12 @@ import re
 from typing import Dict, List
 
 from app.config import Settings
-from app.core.text_utils import normalize_text, split_sentences, stable_hash
+from app.core.text_utils import (
+    normalize_text,
+    split_sentences,
+    stable_hash,
+    strip_markdown_rules,
+)
 from app.models import Chunk, SourceDocument
 from app.logging_conf import get_logger
 
@@ -132,7 +137,12 @@ def _split_table(block: str, chunk_size: int) -> List[str]:
     return parts or [block]
 
 
-def _pack(segments: List[_Segment], chunk_size: int, chunk_overlap: int) -> List[_Segment]:
+def _pack(
+    segments: List[_Segment],
+    chunk_size: int,
+    chunk_overlap: int,
+    span_report: List[Dict[str, object]] | None = None,
+) -> List[_Segment]:
     """把片段列表按 chunk_size 累积打包，并加上相邻重叠。
 
     表格块是"原子"的，不与相邻普通段落混合：
@@ -150,7 +160,14 @@ def _pack(segments: List[_Segment], chunk_size: int, chunk_overlap: int) -> List
             return
         text = "\n".join(seg.text for seg in buffer).strip()
         if text:
-            # 章节取该块第一个片段所属章节，避免标题与正文错配
+            # 章节取该块第一个片段所属章节，避免标题与正文错配。
+            # 但这意味着**跨章节的块会被整体标成首句所在章节** —— 静默错配。
+            # 把这种情况记录下来（不影响行为），便于监控数据质量。
+            sections = {seg.section for seg in buffer}
+            if len(sections) > 1 and span_report is not None:
+                span_report.append(
+                    {"sections": sorted(sections), "preview": text[:40]}
+                )
             packed.append(
                 _Segment(
                     text=text,
@@ -233,6 +250,10 @@ def _merge_tiny(segments: List[_Segment], min_chars: int) -> List[_Segment]:
 def chunk_document(document: SourceDocument, settings: Settings, max_chars: int = 1200) -> List[Chunk]:
     """把一份文档切成带元数据的片段列表。"""
     text = normalize_text(document.text)
+    # 分割线没有语义，但会把切分边界带歪：它被算作上一章节的正文，
+    # 打包时又把下一章节的段落并进来，整块的 section 就标成了上一章节。
+    # 详见 text_utils.strip_markdown_rules 的说明。
+    text = strip_markdown_rules(text)
     if not text:
         return []
 
@@ -316,7 +337,19 @@ def chunk_document(document: SourceDocument, settings: Settings, max_chars: int 
     if not segments:
         return []
 
-    packed = _pack(segments, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    span_report: List[Dict[str, object]] = []
+    packed = _pack(
+        segments,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        span_report=span_report,
+    )
+    if span_report:
+        logger.warning(
+            "切分产生 %d 个跨章节片段，其 section 只会保留首个分句的章节：%s",
+            len(span_report),
+            [item["sections"] for item in span_report[:3]],
+        )
     packed = _merge_tiny(packed, min_chars=settings.chunk_min_chars)
 
     chunks: List[Chunk] = []

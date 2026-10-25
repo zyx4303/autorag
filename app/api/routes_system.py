@@ -9,10 +9,17 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.api.deps import ServiceContainer, get_container, get_vector_store, verify_api_key
+from app.api.deps import (
+    ServiceContainer,
+    get_container,
+    get_metrics,
+    get_vector_store,
+    verify_api_key,
+)
 from app.config import PROJECT_ROOT
 from app.core.loader import scan_documents
 from app.core.text_utils import sha256_text
@@ -137,6 +144,35 @@ async def clear_collection(
             "POST /api/v1/ingest 并带 rebuild=true、reset_registry=true。"
         ),
     )
+
+
+@router.get("/metrics", summary="请求指标：延迟分位数 / token 消耗 / 成本估算")
+async def request_metrics(
+    container: ServiceContainer = Depends(get_container),
+    metrics: Any = Depends(get_metrics),
+    _: None = Depends(verify_api_key),
+) -> Dict[str, Any]:
+    """运营视角的聚合快照（窗口 = 进程启动以来的最近 1000 次请求）。
+
+    延迟看 P95/P99 而不是均值——长尾才是用户实际感受到的慢。
+    成本估算只在配置了 LLM_PRICE_PROMPT_PER_M / LLM_PRICE_COMPLETION_PER_M
+    时输出：价格是会变的商业数据，硬编码进代码必然过期。
+    """
+    if metrics is None:
+        return {"enabled": False, "note": "指标采集未装配"}
+    return {
+        "enabled": True,
+        **metrics.snapshot(
+            price_prompt_per_m=container.settings.llm_price_prompt_per_m,
+            price_completion_per_m=container.settings.llm_price_completion_per_m,
+        ),
+        "cache": (
+            container.query_cache.stats() if container.query_cache is not None else None
+        ),
+        "index_version": (
+            container.index_state.version if container.index_state is not None else None
+        ),
+    }
 
 
 @router.get("/version", summary="版本与构建信息")
